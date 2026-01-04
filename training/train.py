@@ -212,18 +212,43 @@ def create_trainer(
 
 
 class CheckpointCallback(TrainerCallback):
-    """Callback to manage checkpoint retention during training."""
+    """Callback to manage checkpoint retention during training.
 
-    def __init__(self, checkpoint_manager: CheckpointManager):
+    Attributes:
+        checkpoint_manager: Manages checkpoint cleanup with retention policy.
+        checkpoints: Dict mapping checkpoint names to eval_loss values.
+    """
+
+    def __init__(self, checkpoint_manager: CheckpointManager) -> None:
+        """Initialize the callback.
+
+        Args:
+            checkpoint_manager: CheckpointManager instance for cleanup.
+        """
         self.checkpoint_manager = checkpoint_manager
-        self.checkpoints = {}
+        self.checkpoints: dict[str, float] = {}
 
-    def on_evaluate(self, args, state, control, metrics=None, **kwargs):
-        """After evaluation, update checkpoint retention."""
+    def on_evaluate(
+        self,
+        args: Any,
+        state: Any,
+        control: Any,
+        metrics: Optional[dict[str, Any]] = None,
+        **kwargs: Any,
+    ) -> None:
+        """After evaluation, update checkpoint retention.
+
+        Args:
+            args: Training arguments.
+            state: Trainer state.
+            control: Trainer control.
+            metrics: Evaluation metrics including eval_loss.
+            **kwargs: Additional keyword arguments.
+        """
         # Update checkpoints dict with current eval loss
-        chk_name = f"checkpoint-{state.global_step}"
+        checkpoint_name = f"checkpoint-{state.global_step}"
         if metrics and "eval_loss" in metrics:
-            self.checkpoints[chk_name] = metrics["eval_loss"]
+            self.checkpoints[checkpoint_name] = metrics["eval_loss"]
 
         # Run cleanup
         self.checkpoint_manager.cleanup(self.checkpoints)
