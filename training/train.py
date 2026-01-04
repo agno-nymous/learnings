@@ -10,7 +10,7 @@ import importlib.util
 import logging
 import sys
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 # Add project root to path
 project_root = Path(__file__).parent.parent
@@ -19,7 +19,7 @@ sys.path.insert(0, str(project_root))
 import torch
 import wandb
 from configs.base import TrainingConfig
-# from training.dataset import load_dataset  # TODO: uncomment when dependencies installed
+from training.dataset import load_dataset  # TODO: uncomment when dependencies installed
 from trl import SFTConfig, SFTTrainer
 from unsloth import FastVisionModel, is_bf16_supported
 from unsloth.trainer import UnslothVisionDataCollator
@@ -104,7 +104,7 @@ def load_config(config_path: str) -> TrainingConfig:
         raise ValueError(f"Failed to load config from '{config_path}': {e}")
 
 
-def setup_model_and_tokenizer(config: TrainingConfig):
+def setup_model_and_tokenizer(config: TrainingConfig) -> tuple[Any, Any]:
     """Load model and tokenizer with QLoRA.
 
     Args:
@@ -154,12 +154,12 @@ def setup_wandb(config: TrainingConfig):
 
 def create_trainer(
     config: TrainingConfig,
-    model,
-    tokenizer,
-    train_dataset,
-    eval_dataset,
+    model: Any,
+    tokenizer: Any,
+    train_dataset: Any,
+    eval_dataset: Any,
     resume_from_checkpoint: Optional[str] = None,
-):
+) -> SFTTrainer:
     """Create SFTTrainer with configuration.
 
     Args:
@@ -229,61 +229,64 @@ def main() -> None:
     # Setup W&B
     setup_wandb(config)
 
-    # Load model and tokenizer
-    print("Loading model...")
-    model, tokenizer = setup_model_and_tokenizer(config)
+    try:
+        # Load model and tokenizer
+        print("Loading model...")
+        model, tokenizer = setup_model_and_tokenizer(config)
 
-    # Load datasets
-    print("Loading datasets...")
-    train_dataset, eval_dataset = load_dataset(
-        config.dataset_name,
-        train_subset=config.train_subset,
-        eval_subset=config.eval_subset,
-    )
-    print(f"Train: {len(train_dataset)} samples")
-    print(f"Eval: {len(eval_dataset)} samples")
+        # Load datasets
+        print("Loading datasets...")
+        train_dataset, eval_dataset = load_dataset(
+            config.dataset_name,
+            train_subset=config.train_subset,
+            eval_subset=config.eval_subset,
+        )
+        print(f"Train: {len(train_dataset)} samples")
+        print(f"Eval: {len(eval_dataset)} samples")
 
-    # Create trainer
-    print("Creating trainer...")
-    trainer = create_trainer(
-        config,
-        model,
-        tokenizer,
-        train_dataset,
-        eval_dataset,
-        resume_from_checkpoint=args.resume,
-    )
+        # Create trainer
+        print("Creating trainer...")
+        trainer = create_trainer(
+            config,
+            model,
+            tokenizer,
+            train_dataset,
+            eval_dataset,
+            resume_from_checkpoint=args.resume,
+        )
 
-    # Train
-    print("Starting training...")
-    gpu_stats = torch.cuda.is_available()
-    if gpu_stats:
-        gpu_props = torch.cuda.get_device_properties(0)
-        max_memory = round(gpu_props.total_memory / 1024 / 1024 / 1024, 3)
-        print(f"GPU: {gpu_props.name}, Max Memory: {max_memory} GB")
-    else:
-        print("No GPU detected")
+        # Train
+        print("Starting training...")
+        gpu_stats = torch.cuda.is_available()
+        if gpu_stats:
+            gpu_props = torch.cuda.get_device_properties(0)
+            max_memory = round(gpu_props.total_memory / 1024 / 1024 / 1024, 3)
+            print(f"GPU: {gpu_props.name}, Max Memory: {max_memory} GB")
+        else:
+            print("No GPU detected")
 
-    trainer_stats = trainer.train(resume_from_checkpoint=args.resume)
+        trainer_stats = trainer.train(resume_from_checkpoint=args.resume)
 
-    used_memory = (
-        round(torch.cuda.max_memory_reserved() / 1024 / 1024 / 1024, 3)
-        if gpu_stats
-        else 0
-    )
-    print(f"\nTraining Time: {round(trainer_stats.metrics['train_runtime'] / 60, 2)} min")
-    if used_memory > 0:
-        print(f"Peak Memory: {used_memory} GB ({round(used_memory / max_memory * 100, 1)}%)")
+        used_memory = (
+            round(torch.cuda.max_memory_reserved() / 1024 / 1024 / 1024, 3)
+            if gpu_stats
+            else 0
+        )
+        print(f"\nTraining Time: {round(trainer_stats.metrics['train_runtime'] / 60, 2)} min")
+        if used_memory > 0:
+            print(f"Peak Memory: {used_memory} GB ({round(used_memory / max_memory * 100, 1)}%)")
 
-    # Save final model
-    print("\nSaving model...")
-    output_path = f"{config.output_dir}/{config.experiment_name}"
-    model.save_pretrained(output_path)
-    tokenizer.save_pretrained(output_path)
-    print(f"Model saved to {output_path}")
+        # Save final model
+        print("\nSaving model...")
+        output_path = f"{config.output_dir}/{config.experiment_name}"
+        model.save_pretrained(output_path)
+        tokenizer.save_pretrained(output_path)
+        print(f"Model saved to {output_path}")
 
-    if config.report_to_wandb:
-        wandb.finish()
+    finally:
+        # Always cleanup W&B, even if training fails
+        if config.report_to_wandb:
+            wandb.finish()
 
     print("Training complete!")
 
