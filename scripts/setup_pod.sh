@@ -52,13 +52,12 @@ mkdir -p "$NETWORK_VOLUME/logs"
 echo "Logging into Weights & Biases..."
 wandb login "$WANDB_API_KEY"
 
-# Run training
+# Run training with auto-resume
 echo "Starting training..."
 LOG_FILE="$NETWORK_VOLUME/logs/${EXPERIMENT_NAME:-training}-$(date +%Y%m%d-%H%M%S).log"
 
-python training/train.py \
-    --config "$CONFIG_PATH" \
-    2>&1 | tee "$LOG_FILE"
+# Use resume wrapper to automatically restart from checkpoint if available
+bash scripts/resume_training.sh "$NETWORK_VOLUME/checkpoints" "$CONFIG_PATH" 2>&1 | tee "$LOG_FILE"
 
 echo "=== Training completed ==="
 echo "End time: $(date)"
