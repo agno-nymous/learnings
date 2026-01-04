@@ -19,8 +19,10 @@ sys.path.insert(0, str(project_root))
 import torch
 import wandb
 from configs.base import TrainingConfig
+from training.checkpoint import CheckpointManager
 from training.dataset import load_dataset  # TODO: uncomment when dependencies installed
 from training.preflight import run_preflight_checks
+from transformers import TrainerCallback
 from trl import SFTConfig, SFTTrainer
 from unsloth import FastVisionModel, is_bf16_supported
 from unsloth.trainer import UnslothVisionDataCollator
@@ -209,6 +211,24 @@ def create_trainer(
     )
 
 
+class CheckpointCallback(TrainerCallback):
+    """Callback to manage checkpoint retention during training."""
+
+    def __init__(self, checkpoint_manager: CheckpointManager):
+        self.checkpoint_manager = checkpoint_manager
+        self.checkpoints = {}
+
+    def on_evaluate(self, args, state, control, metrics=None, **kwargs):
+        """After evaluation, update checkpoint retention."""
+        # Update checkpoints dict with current eval loss
+        chk_name = f"checkpoint-{state.global_step}"
+        if metrics and "eval_loss" in metrics:
+            self.checkpoints[chk_name] = metrics["eval_loss"]
+
+        # Run cleanup
+        self.checkpoint_manager.cleanup(self.checkpoints)
+
+
 def main() -> None:
     """Main training entry point."""
     args = parse_args()
@@ -258,6 +278,16 @@ def main() -> None:
             eval_dataset,
             resume_from_checkpoint=args.resume,
         )
+
+        # Create checkpoint manager
+        checkpoint_mgr = CheckpointManager(
+            Path(config.output_dir),
+            keep_best=5,
+            keep_recent=5,
+        )
+
+        # Add checkpoint callback
+        trainer.add_callback(CheckpointCallback(checkpoint_mgr))
 
         # Train
         print("Starting training...")
