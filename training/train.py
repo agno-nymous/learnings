@@ -21,6 +21,7 @@ sys.path.insert(0, str(project_root))
 import torch
 import wandb
 from configs.base import TrainingConfig
+from tenacity import retry, stop_after_attempt, wait_exponential
 from training.checkpoint import CheckpointManager
 from training.dataset import load_dataset  # TODO: uncomment when dependencies installed
 from training.preflight import run_preflight_checks
@@ -30,6 +31,31 @@ from unsloth import FastVisionModel, is_bf16_supported
 from unsloth.trainer import UnslothVisionDataCollator
 
 logger = logging.getLogger(__name__)
+
+
+@retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=1, max=4))
+def load_dataset_with_retry(dataset_name: str, train_subset: int = -1, eval_subset: int = -1):
+    """Load dataset with exponential backoff retry.
+
+    Args:
+        dataset_name: HuggingFace dataset identifier.
+        train_subset: Number of training samples.
+        eval_subset: Number of eval samples.
+
+    Returns:
+        Tuple of (train_dataset, eval_dataset).
+    """
+    return load_dataset(dataset_name, train_subset=train_subset, eval_subset=eval_subset)
+
+
+@retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=1, max=4))
+def wandb_init_with_retry(**kwargs) -> None:
+    """Initialize W&B with retry.
+
+    Args:
+        **kwargs: Arguments passed to wandb.init().
+    """
+    return wandb.init(**kwargs)
 
 
 def parse_args() -> argparse.Namespace:
@@ -201,14 +227,14 @@ def setup_model_and_tokenizer(config: TrainingConfig) -> tuple[Any, Any]:
     return model, tokenizer
 
 
-def setup_wandb(config: TrainingConfig):
-    """Initialize Weights & Biases logging.
+def setup_wandb(config: TrainingConfig) -> None:
+    """Initialize Weights & Biases logging with retry.
 
     Args:
         config: Training configuration.
     """
     if config.report_to_wandb:
-        wandb.init(
+        wandb_init_with_retry(
             project=config.wandb_project,
             entity=config.wandb_entity,
             name=config.experiment_name,
@@ -344,9 +370,9 @@ def main() -> None:
         print("Loading model...")
         model, tokenizer = setup_model_and_tokenizer(config)
 
-        # Load datasets
+        # Load datasets with retry
         print("Loading datasets...")
-        train_dataset, eval_dataset = load_dataset(
+        train_dataset, eval_dataset = load_dataset_with_retry(
             config.dataset_name,
             train_subset=config.train_subset,
             eval_subset=config.eval_subset,
