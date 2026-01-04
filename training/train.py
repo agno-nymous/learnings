@@ -250,7 +250,13 @@ def setup_model_and_tokenizer(config: TrainingConfig) -> tuple[Any, Any]:
         finetune_mlp_modules=config.finetune_mlp_modules if not is_paddleocr else None,
     )
 
-    return model, tokenizer
+    # For PaddleOCR, also load the processor
+    if is_paddleocr:
+        from transformers import AutoProcessor
+        processor = AutoProcessor.from_pretrained(config.model_name, trust_remote_code=True)
+        return model, tokenizer, processor
+    
+    return model, tokenizer, None
 
 
 def setup_wandb(config: TrainingConfig) -> None:
@@ -274,6 +280,7 @@ def create_trainer(
     tokenizer: Any,
     train_dataset: Any,
     eval_dataset: Any,
+    processor: Any = None,
     resume_from_checkpoint: Optional[str] = None,
 ) -> SFTTrainer:
     """Create SFTTrainer with configuration.
@@ -284,6 +291,7 @@ def create_trainer(
         tokenizer: Tokenizer.
         train_dataset: Training dataset.
         eval_dataset: Evaluation dataset.
+        processor: Optional processor for vision models.
         resume_from_checkpoint: Optional checkpoint path to resume from.
 
     Returns:
@@ -291,10 +299,26 @@ def create_trainer(
     """
     FastVisionModel.for_training(model)
 
+    # Use processor-based collator for PaddleOCR
+    is_paddleocr = "PaddleOCR" in config.model_name
+    if is_paddleocr and processor is not None:
+        data_collator = UnslothVisionDataCollator(
+            model=model,
+            processor=processor,
+            ignore_index=-100,
+            max_seq_length=config.max_seq_length,
+            train_on_responses_only=True,
+            instruction_part="User: ",
+            response_part="\nAssistant:",
+            pad_to_multiple_of=8,
+        )
+    else:
+        data_collator = UnslothVisionDataCollator(model, tokenizer)
+
     return SFTTrainer(
         model=model,
-        processing_class=tokenizer,
-        data_collator=UnslothVisionDataCollator(model, tokenizer),
+        processing_class=processor.tokenizer if processor else tokenizer,
+        data_collator=data_collator,
         train_dataset=train_dataset,
         eval_dataset=eval_dataset,
         args=SFTConfig(
@@ -393,7 +417,7 @@ def main() -> None:
     try:
         # Load model and tokenizer
         print("Loading model...")
-        model, tokenizer = setup_model_and_tokenizer(config)
+        model, tokenizer, processor = setup_model_and_tokenizer(config)
 
         # Load datasets with retry
         print("Loading datasets...")
@@ -413,6 +437,7 @@ def main() -> None:
             tokenizer,
             train_dataset,
             eval_dataset,
+            processor=processor,
             resume_from_checkpoint=args.resume,
         )
 
