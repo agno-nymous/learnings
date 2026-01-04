@@ -1,0 +1,42 @@
+# Environment variables
+.env
+
+# Virtual environment
+.venv/
+
+# Downloaded and processed files
+elog_downloads/
+cropped_headers/
+test_output/
+test_cropped/
+test_rotated/
+test_cropped_4_2/
+test_cropped_1_1/
+
+# OCR output datasets
+*.jsonl
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.Python
+*.so
+.eggs/
+*.egg-info/
+*.egg
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+
+# Data
+datasets/

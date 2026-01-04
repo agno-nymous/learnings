@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>OCR Analysis Viewer</title>
+    <link rel="stylesheet" href="/style.css">
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+</head>
+
+<body>
+    <header>
+        <h1>Well Log Header OCR Viewer</h1>
+        <div class="nav-controls">
+            <button id="prevBtn" title="Previous (←)">← Prev</button>
+            <span id="counter">0 / 0</span>
+            <button id="nextBtn" title="Next (→)">Next →</button>
+            <input type="number" id="jumpInput" min="1" placeholder="#" title="Jump to entry">
+            <button id="jumpBtn">Go</button>
+        </div>
+    </header>
+
+    <main>
+        <div class="pane image-pane">
+            <h2>Input Image</h2>
+            <div class="image-container">
+                <img id="sourceImage" alt="Well log header image">
+            </div>
+            <div class="metadata-panel">
+                <div class="filename" id="filename"></div>
+                <div class="metadata" id="metadata"></div>
+            </div>
+        </div>
+
+        <div class="pane output-pane">
+            <h2>OCR Output (Rendered)</h2>
+            <div id="renderedOutput" class="rendered-content"></div>
+        </div>
+    </main>
+
+    <script src="/app.js"></script>
+</body>
+
+</html>
