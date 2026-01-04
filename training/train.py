@@ -20,6 +20,7 @@ import torch
 import wandb
 from configs.base import TrainingConfig
 from training.dataset import load_dataset  # TODO: uncomment when dependencies installed
+from training.preflight import run_preflight_checks
 from trl import SFTConfig, SFTTrainer
 from unsloth import FastVisionModel, is_bf16_supported
 from unsloth.trainer import UnslothVisionDataCollator
@@ -225,6 +226,9 @@ def main() -> None:
     print(f"W&B Project: {config.wandb_project}")
     print(f"Output Dir: {config.output_dir}")
     print(f"=============================\n")
+
+    # Run pre-flight checks
+    run_preflight_checks(config)
 
     # Setup W&B
     setup_wandb(config)
