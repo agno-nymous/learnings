@@ -9,6 +9,8 @@ import importlib
 import importlib.util
 import logging
 import sys
+import time
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Optional
 
@@ -105,6 +107,65 @@ def load_config(config_path: str) -> TrainingConfig:
         raise ValueError(f"Config file must contain a 'config' variable: {e}")
     except Exception as e:
         raise ValueError(f"Failed to load config from '{config_path}': {e}")
+
+
+@dataclass
+class CostTracker:
+    """Track training costs based on GPU hourly rate."""
+    gpu_hourly_rate: float  # e.g., 0.40 for RTX 4090 spot
+    start_time: float = 0.0
+    total_cost: float = 0.0
+
+    def start(self) -> None:
+        """Start tracking training time."""
+        self.start_time = time.time()
+
+    def update(self) -> float:
+        """Update total cost and return current value.
+
+        Returns:
+            Current accumulated cost in USD.
+        """
+        elapsed_hours = (time.time() - self.start_time) / 3600
+        self.total_cost = elapsed_hours * self.gpu_hourly_rate
+        return self.total_cost
+
+
+def get_gpu_rate(config: TrainingConfig) -> float:
+    """Get hourly GPU rate from config.
+
+    Args:
+        config: Training configuration.
+
+    Returns:
+        Hourly rate in USD.
+    """
+    # Approximate rates for spot instances (USD)
+    rates = {
+        "RTX_3090": 0.25,
+        "RTX_4090": 0.40,
+        "A100": 1.50,
+        "H100": 2.50,
+    }
+    return rates.get(config.gpu_type, 0.40)
+
+
+class CostLoggingCallback(TrainerCallback):
+    """Log training cost to W&B during training."""
+
+    def __init__(self, cost_tracker: CostTracker, budget_cap: float):
+        self.cost_tracker = cost_tracker
+        self.budget_cap = budget_cap
+
+    def on_log(self, args, state, control, logs=None, **kwargs):
+        """Log current cost to W&B."""
+        current_cost = self.cost_tracker.update()
+        if wandb.run is not None:
+            wandb.log({"cost_usd": current_cost})
+
+        # Warn if approaching budget
+        if current_cost > self.budget_cap * 0.9:
+            logger.warning(f"Approaching budget cap: ${current_cost:.2f} / ${self.budget_cap:.2f}")
 
 
 def setup_model_and_tokenizer(config: TrainingConfig) -> tuple[Any, Any]:
@@ -313,6 +374,13 @@ def main() -> None:
 
         # Add checkpoint callback
         trainer.add_callback(CheckpointCallback(checkpoint_mgr))
+
+        # Setup cost tracking
+        cost_tracker = CostTracker(gpu_hourly_rate=get_gpu_rate(config))
+        cost_tracker.start()
+
+        # Add cost logging callback
+        trainer.add_callback(CostLoggingCallback(cost_tracker, config.budget_cap))
 
         # Train
         print("Starting training...")
