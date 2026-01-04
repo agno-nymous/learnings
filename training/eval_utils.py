@@ -1,7 +1,5 @@
 """Utilities for evaluation and high-loss sample logging."""
 
-import base64
-from io import BytesIO
 from typing import List, Dict, Any
 import wandb
 
