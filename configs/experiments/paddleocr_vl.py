@@ -5,3 +5,4 @@ config = TrainingConfig(
     model_name="unsloth/PaddleOCR-VL",
     r=64,  # PaddleOCR uses r=64
     lora_alpha=64,
+)
