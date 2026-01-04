@@ -38,23 +38,30 @@ def load_config(config_path: str) -> TrainingConfig:
     """Load config from Python file.
 
     Args:
-        config_path: File path to config Python file.
+        config_path: Import path like 'configs.experiments.quick_val' or file path.
 
     Returns:
         TrainingConfig instance.
     """
-    # Convert to file path if needed
-    config_file = Path(config_path)
-    if not config_file.is_absolute():
-        # Relative to project root
-        config_file = project_root / config_path
+    # Support both import paths and file paths
+    if config_path.startswith("configs/") or config_path.startswith("configs."):
+        # Import path - load module and get 'config' variable
+        module_path = config_path.replace(".py", "").replace("/", ".")
+        import importlib
+        module = importlib.import_module(module_path)
+        return module.config
+    else:
+        # File path - exec and get 'config' variable
+        config_file = Path(config_path)
+        if not config_file.is_absolute():
+            # Relative to project root
+            config_file = project_root / config_path
 
-    # Load and exec the config file
-    import importlib.util
-    spec = importlib.util.spec_from_file_location("config_module", config_file)
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module.config
+        import importlib.util
+        spec = importlib.util.spec_from_file_location("config_module", config_file)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        return module.config
 
 
 def main():
