@@ -2,7 +2,7 @@
 transformers==4.56.2
 trl==0.22.2
 unsloth==2024.12.10
-torch==2.5.1
+torch>=2.0.0
 peft>=0.10.0
 datasets==4.3.0
 bitsandbytes
