@@ -12,7 +12,7 @@ logger = logging.getLogger(__name__)
 class CheckpointManager:
     """Manages checkpoint saving and cleanup with retention policy."""
 
-    def __init__(self, output_dir: Path, keep_best: int = 5, keep_recent: int = 5):
+    def __init__(self, output_dir: Path, keep_best: int = 5, keep_recent: int = 5) -> None:
         """Initialize checkpoint manager.
 
         Args:
@@ -43,6 +43,20 @@ class CheckpointManager:
                     logger.warning(f"Could not read eval_loss from {state_file}")
         return checkpoints
 
+    def _extract_step_number(self, checkpoint_name: str) -> int:
+        """Extract step number from checkpoint name.
+
+        Args:
+            checkpoint_name: Checkpoint directory name like 'checkpoint-123'
+
+        Returns:
+            Step number as int, or 0 if not parseable.
+        """
+        parts = checkpoint_name.split("-")
+        if len(parts) >= 2 and parts[1].isdigit():
+            return int(parts[1])
+        return 0
+
     def cleanup(self, checkpoints: Dict[str, float]) -> None:
         """Remove checkpoints outside retention policy.
 
@@ -63,7 +77,7 @@ class CheckpointManager:
         # Sort by step number (descending) - keep recent
         sorted_by_step = sorted(
             checkpoints.items(),
-            key=lambda x: int(x[0].split("-")[1]) if x[0].split("-")[1].isdigit() else 0,
+            key=lambda x: self._extract_step_number(x[0]),
             reverse=True
         )
         recent_names = {name for name, _ in sorted_by_step[:self.keep_recent]}
@@ -77,6 +91,21 @@ class CheckpointManager:
                 chk_path = self.output_dir / chk_name
                 shutil.rmtree(chk_path)
                 logger.info(f"Removed checkpoint: {chk_name}")
+
+
+def _extract_step_number_from_name(checkpoint_name: str) -> int:
+    """Extract step number from checkpoint name.
+
+    Args:
+        checkpoint_name: Checkpoint directory name like 'checkpoint-123'
+
+    Returns:
+        Step number as int, or 0 if not parseable.
+    """
+    parts = checkpoint_name.split("-")
+    if len(parts) >= 2 and parts[1].isdigit():
+        return int(parts[1])
+    return 0
 
 
 def get_latest_checkpoint(output_dir: Path) -> Optional[Path]:
@@ -98,7 +127,7 @@ def get_latest_checkpoint(output_dir: Path) -> Optional[Path]:
 
     # Sort by step number (descending)
     checkpoints.sort(
-        key=lambda p: int(p.name.split("-")[1]) if p.name.split("-")[1].isdigit() else 0,
+        key=lambda p: _extract_step_number_from_name(p.name),
         reverse=True
     )
     return checkpoints[0]
