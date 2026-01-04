@@ -4,15 +4,16 @@
 import argparse
 import sys
 from pathlib import Path
+from typing import Any
 import json
 
-def parse_args():
+def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Compare training experiments")
     parser.add_argument("--runs", nargs="+", required=True, help="W&B run IDs or checkpoint paths")
     parser.add_argument("--metrics", nargs="+", default=["eval_loss", "cer", "wer"], help="Metrics to compare")
     return parser.parse_args()
 
-def load_run_metrics(run_id: str) -> dict:
+def load_run_metrics(run_id: str) -> dict[str, Any]:
     """Load metrics from a run (W&B or local).
 
     Args:
@@ -27,7 +28,7 @@ def load_run_metrics(run_id: str) -> dict:
         api = wandb.Api()
         run = api.run(run_id)
         return run.summary
-    except:
+    except Exception:
         pass
 
     # Fallback to local checkpoint
@@ -39,7 +40,7 @@ def load_run_metrics(run_id: str) -> dict:
 
     raise ValueError(f"Could not load metrics for {run_id}")
 
-def main():
+def main() -> None:
     """Main entry point."""
     args = parse_args()
 
@@ -55,7 +56,7 @@ def main():
 
             print(f"{run_id:<40} {str(eval_loss):<12} {str(cer):<8} {str(wer):<8}")
         except Exception as e:
-            print(f"{run_id:<40} ERROR: {e}")
+            print(f"{run_id:<40} ERROR: {type(e).__name__}: {e}")
 
 if __name__ == "__main__":
     main()
