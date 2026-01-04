@@ -7,7 +7,7 @@ class TrainingConfig:
     """Base configuration for Qwen3-VL QLoRA training."""
 
     # === Model ===
-    model_name: str = "unsloth/Qwen3-VL-2B-Instruct-unsloth-bnb-4bit"
+    model_name: str = "unsloth/PaddleOCR-VL-bnb-4bit"  # Changed from Qwen3-VL for better Unsloth compatibility
     load_in_4bit: bool = True
     use_gradient_checkpointing: str = "unsloth"
 
@@ -47,7 +47,7 @@ class TrainingConfig:
     logging_steps: int = 1
 
     # === Output ===
-    output_dir: str = "/runpod_volume/checkpoints"
+    output_dir: str = "./checkpoints"  # Use relative path; mount network volume here if needed
     experiment_name: Optional[str] = None  # Auto-generated if None
 
     # === Hardware/RunPod ===

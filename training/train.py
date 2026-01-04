@@ -25,10 +25,13 @@ from tenacity import retry, stop_after_attempt, wait_exponential
 from training.checkpoint import CheckpointManager
 from training.dataset import load_dataset  # TODO: uncomment when dependencies installed
 from training.preflight import run_preflight_checks
-from transformers import TrainerCallback
-from trl import SFTConfig, SFTTrainer
+
+# CRITICAL: Import unsloth BEFORE trl to ensure proper patching
 from unsloth import FastVisionModel, is_bf16_supported
 from unsloth.trainer import UnslothVisionDataCollator
+
+from transformers import TrainerCallback
+from trl import SFTConfig, SFTTrainer
 
 logger = logging.getLogger(__name__)
 
@@ -267,7 +270,7 @@ def create_trainer(
 
     return SFTTrainer(
         model=model,
-        tokenizer=tokenizer,
+        processing_class=tokenizer,
         data_collator=UnslothVisionDataCollator(model, tokenizer),
         train_dataset=train_dataset,
         eval_dataset=eval_dataset,
@@ -293,7 +296,6 @@ def create_trainer(
             dataset_text_field="",
             dataset_kwargs={"skip_prepare_dataset": True},
             dataset_num_proc=config.dataset_num_proc,
-            max_seq_length=config.max_seq_length,
         ),
     )
 
