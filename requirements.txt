@@ -10,6 +10,7 @@ accelerate
 triton
 cut_cross_entropy
 unsloth_zoo
+einops
 
 # Data processing
 pillow>=10.0.0

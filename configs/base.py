@@ -46,6 +46,11 @@ class TrainingConfig:
     eval_steps: int = 50
     logging_steps: int = 1
 
+    # === Early Stopping ===
+    train_loss_threshold: float = 0.2  # Stop training when train_loss drops below this
+    early_stopping_patience: int = 3  # Stop after N evals without eval_loss improvement
+    early_stopping_min_evals: int = 2  # Minimum evals before early stopping applies
+
     # === Output ===
     output_dir: str = "./checkpoints"  # Use relative path; mount network volume here if needed
     experiment_name: Optional[str] = None  # Auto-generated if None

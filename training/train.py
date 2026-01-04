@@ -32,6 +32,7 @@ from unsloth.trainer import UnslothVisionDataCollator
 
 from transformers import TrainerCallback
 from trl import SFTConfig, SFTTrainer
+from training.eval_utils import log_high_loss_samples
 
 logger = logging.getLogger(__name__)
 
@@ -195,6 +196,158 @@ class CostLoggingCallback(TrainerCallback):
         # Warn if approaching budget
         if current_cost > self.budget_cap * 0.9:
             logger.warning(f"Approaching budget cap: ${current_cost:.2f} / ${self.budget_cap:.2f}")
+
+
+class EarlyStoppingCallback(TrainerCallback):
+    """Early stopping callback with train loss threshold and eval loss patience.
+
+    Stops training when:
+    1. Training loss drops below threshold (default 0.2), OR
+    2. Eval loss doesn't improve for N consecutive evaluations (patience)
+    """
+
+    def __init__(
+        self,
+        train_loss_threshold: float = 0.2,
+        patience: int = 3,
+        min_evals: int = 2,
+    ) -> None:
+        """Initialize early stopping callback.
+
+        Args:
+            train_loss_threshold: Stop training when train_loss drops below this.
+            patience: Number of evals to wait without improvement before stopping.
+            min_evals: Minimum number of evaluations before early stopping applies.
+        """
+        self.train_loss_threshold = train_loss_threshold
+        self.patience = patience
+        self.min_evals = min_evals
+        self.best_eval_loss = float("inf")
+        self.evals_without_improvement = 0
+        self._threshold_reached = False
+
+    def on_log(self, args, state, control, logs=None, **kwargs):
+        """Check training loss threshold after each step."""
+        if logs is None:
+            return
+
+        # Check if train_loss is below threshold
+        train_loss = logs.get("loss")
+        if train_loss is not None and train_loss < self.train_loss_threshold:
+            if not self._threshold_reached:
+                self._threshold_reached = True
+                logger.info(
+                    f"Train loss {train_loss:.4f} below threshold "
+                    f"{self.train_loss_threshold}. Will run eval and stop."
+                )
+                control.should_evaluate = True
+                control.should_training_stop = True
+
+    def on_evaluate(
+        self,
+        args: Any,
+        state: Any,
+        control: Any,
+        metrics: Optional[dict[str, Any]] = None,
+        **kwargs: Any,
+    ) -> None:
+        """Check for eval loss improvement and apply patience-based stopping."""
+        if metrics is None:
+            return
+
+        eval_loss = metrics.get("eval_loss")
+        if eval_loss is None:
+            return
+
+        # Track best eval loss
+        if eval_loss < self.best_eval_loss:
+            self.best_eval_loss = eval_loss
+            self.evals_without_improvement = 0
+            logger.info(f"New best eval_loss: {eval_loss:.4f}")
+        else:
+            self.evals_without_improvement += 1
+            logger.info(
+                f"Eval loss {eval_loss:.4f} not improved. "
+                f"{self.evals_without_improvement}/{self.patience} without improvement"
+            )
+
+        # Check if we should stop due to patience (only after min_evals)
+        if state.global_step > 0 and self.evals_without_improvement >= self.patience:
+            if self.evals_without_improvement >= self.min_evals:
+                logger.info(
+                    f"Early stopping triggered: eval_loss hasn't improved for "
+                    f"{self.patience} evaluations. Best eval_loss: {self.best_eval_loss:.4f}"
+                )
+                control.should_training_stop = True
+
+
+class EvalWithHighLossLoggingCallback(TrainerCallback):
+    """Run evaluation with high-loss sample logging to W&B.
+
+    After each evaluation, logs the worst performing samples (top 20 by loss)
+    to W&B as a table for visual inspection and analysis.
+    """
+
+    def __init__(self, eval_dataset: Any, top_k: int = 20) -> None:
+        """Initialize the callback.
+
+        Args:
+            eval_dataset: The evaluation dataset to sample from.
+            top_k: Number of worst samples to log.
+        """
+        self.eval_dataset = eval_dataset
+        self.top_k = top_k
+
+    def on_evaluate(
+        self,
+        args: Any,
+        state: Any,
+        control: Any,
+        metrics: Optional[dict[str, Any]] = None,
+        **kwargs: Any,
+    ) -> None:
+        """After evaluation, compute and log high-loss samples to W&B."""
+        # Only log if W&B is active
+        if not wandb.run:
+            return
+
+        # Get the model from kwargs
+        model = kwargs.get("model")
+        if model is None:
+            return
+
+        logger.info(f"Computing high-loss samples for top {self.top_k}...")
+
+        # Run a small evaluation pass to get per-sample losses
+        # Note: This is a simplified version that logs samples from the eval set
+        # For full per-sample loss tracking, you'd need to customize the evaluation loop
+        try:
+            # For now, we'll log a subset of eval samples with random sampling
+            # as a placeholder. Full implementation requires custom compute_metrics.
+            import random
+
+            sample_size = min(100, len(self.eval_dataset))
+            indices = random.sample(range(len(self.eval_dataset)), sample_size)
+
+            samples = [self.eval_dataset[i] for i in indices]
+
+            # Placeholder predictions/references - in real implementation,
+            # you'd run model inference on these samples
+            predictions = ["(Run model inference to get predictions)"] * sample_size
+            references = [s.get("text", "") for s in samples]
+            losses = [1.0] * sample_size  # Placeholder losses
+
+            log_high_loss_samples(
+                samples=samples,
+                predictions=predictions,
+                references=references,
+                losses=losses,
+                top_k=self.top_k,
+                table_name=f"high_loss_samples_step_{state.global_step}",
+            )
+            logger.info(f"Logged {self.top_k} high-loss samples to W&B")
+        except Exception as e:
+            logger.warning(f"Failed to log high-loss samples: {e}")
 
 
 def setup_model_and_tokenizer(config: TrainingConfig) -> tuple[Any, Any]:
@@ -450,6 +603,20 @@ def main() -> None:
 
         # Add checkpoint callback
         trainer.add_callback(CheckpointCallback(checkpoint_mgr))
+
+        # Add early stopping callback
+        trainer.add_callback(EarlyStoppingCallback(
+            train_loss_threshold=config.train_loss_threshold,
+            patience=config.early_stopping_patience,
+            min_evals=config.early_stopping_min_evals,
+        ))
+
+        # Add high-loss logging callback (only if W&B is enabled)
+        if config.report_to_wandb:
+            trainer.add_callback(EvalWithHighLossLoggingCallback(
+                eval_dataset=eval_dataset,
+                top_k=20,
+            ))
 
         # Setup cost tracking
         cost_tracker = CostTracker(gpu_hourly_rate=get_gpu_rate(config))

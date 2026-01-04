@@ -1,4 +1,4 @@
-.PHONY: setup download rotate crop preprocess annotate annotate-batch app clean help olmocr-download split-welllog
+.PHONY: setup download rotate crop preprocess annotate annotate-batch app clean help olmocr-download split-welllog train train-paddleocr train-qwen setup-pod resume download-from-runpod download-final-only
 
 # Default settings
 N ?= 500
@@ -7,6 +7,14 @@ PYTHON ?= .venv/bin/python3
 MODE ?= realtime
 MODEL ?= gemini-3-flash-preview
 DATASET ?= welllog-train
+
+# Early stopping settings
+TRAIN_LOSS_THRESHOLD ?= 0.2
+EARLY_STOP_PATIENCE ?= 3
+
+# Training config
+CONFIG ?= configs/experiments/paddleocr_vl.py
+RESUME ?=
 
 # Directories (legacy)
 DOWNLOADS_DIR ?= ./elog_downloads
@@ -35,6 +43,20 @@ help:
 	@echo "  Annotation (DATASET=welllog-train|olmocr-train|...):"
 	@echo "    make annotate           OCR with Gemini (real-time)"
 	@echo "    make annotate-batch     OCR with Batch API (50% cheaper)"
+	@echo ""
+	@echo "  Training:"
+	@echo "    make train              Train with default config (PaddleOCR-VL)"
+	@echo "    make train CONFIG=configs/experiments/qwen3_qlora_r16.py"
+	@echo "    make train RESUME=checkpoints/checkpoint-100"
+	@echo ""
+	@echo "    Early stopping: train_loss < $(TRAIN_LOSS_THRESHOLD) or"
+	@echo "                   $(EARLY_STOP_PATIENCE) evals without improvement"
+	@echo ""
+	@echo "  Download from RunPod:"
+	@echo "    make download-from-runpod RUNPOD_HOST=user@1.2.3.4"
+	@echo "    make download-final-only RUNPOD_HOST=user@1.2.3.4"
+	@echo ""
+	@echo "    Optional: RUNPOD_SSH_KEY=~/.ssh/key RUNPOD_PORT=2222"
 	@echo ""
 	@echo "  Web App:"
 	@echo "    make app                Start web app (port 8000)"
@@ -104,3 +126,59 @@ clean:
 	rm -rf $(DOWNLOADS_DIR) $(HEADERS_DIR)
 	rm -f *.jsonl ocr_execution.log batch_input_temp.jsonl
 
+# ═══════════════════════════════════════════════════════════════
+# Training (RunPod)
+# ═══════════════════════════════════════════════════════════════
+
+train:
+	python training/train.py --config $(CONFIG) $(if $(RESUME),--resume $(RESUME))
+
+train-paddleocr:
+	python training/train.py --config configs/experiments/paddleocr_vl.py
+
+train-qwen:
+	python training/train.py --config configs/experiments/qwen3_qlora_r16.py
+
+resume:
+	python training/train.py --config $(CONFIG) --resume $(RESUME)
+
+# Download from RunPod
+RUNPOD_HOST ?=
+RUNPOD_SOURCE ?= checkpoints
+RUNPOD_DEST ?= ./checkpoints
+RUNPOD_SSH_KEY ?=
+RUNPOD_PORT ?= 22
+
+download-from-runpod:
+	@if [ -z "$(RUNPOD_HOST)" ]; then \
+		echo "Error: RUNPOD_HOST is required"; \
+		echo "Usage: make download-from-runpod RUNPOD_HOST=user@1.2.3.4"; \
+		exit 1; \
+	fi
+	python scripts/download_from_runpod.py $(RUNPOD_HOST) \
+		--source $(RUNPOD_SOURCE) \
+		--dest $(RUNPOD_DEST) \
+		$(if $(RUNPOD_SSH_KEY),--ssh-key $(RUNPOD_SSH_KEY)) \
+		--port $(RUNPOD_PORT)
+
+download-final-only:
+	@if [ -z "$(RUNPOD_HOST)" ]; then \
+		echo "Error: RUNPOD_HOST is required"; \
+		echo "Usage: make download-final-only RUNPOD_HOST=user@1.2.3.4"; \
+		exit 1; \
+	fi
+	python scripts/download_from_runpod.py $(RUNPOD_HOST) \
+		--source $(RUNPOD_SOURCE) \
+		--dest $(RUNPOD_DEST) \
+		$(if $(RUNPOD_SSH_KEY),--ssh-key $(RUNPOD_SSH_KEY)) \
+		--port $(RUNPOD_PORT) \
+		--final-only
+
+setup-pod:
+	pip install -r requirements.txt
+	@if [ -n "$$WANDB_API_KEY" ]; then wandb login $$WANDB_API_KEY; fi
+	@echo "Setup complete. Run 'make train' to start training."
+	@echo ""
+	@echo "Early stopping configured:"
+	@echo "  - Stop when train_loss < $(TRAIN_LOSS_THRESHOLD)"
+	@echo "  - Stop after $(EARLY_STOP_PATIENCE) evals without improvement"
