@@ -44,13 +44,17 @@ class LazyVisionDataset:
             Dict with 'messages' (for Unsloth) and 'images' (lazy-loaded PIL Images).
         """
         sample = self.data[idx]
+        img = b64_to_image(sample["image_base64"])
+        
+        # Format required by PaddleOCR/Unsloth - image must be included in content
         return {
+            "images": [img],
             "messages": [
                 {
                     "role": "user",
                     "content": [
-                        {"type": "image"},
                         {"type": "text", "text": sample["instruction"]},
+                        {"type": "image", "image": img},
                     ],
                 },
                 {
@@ -58,7 +62,6 @@ class LazyVisionDataset:
                     "content": [{"type": "text", "text": sample["answer"]}],
                 },
             ],
-            "images": [b64_to_image(sample["image_base64"])],
         }
 
 

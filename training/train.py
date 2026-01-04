@@ -306,7 +306,7 @@ def create_trainer(
             model=model,
             processor=processor,
             ignore_index=-100,
-            max_seq_length=config.max_seq_length,
+            max_seq_length=4096,  # Per Colab notebook for PaddleOCR
             train_on_responses_only=True,
             instruction_part="User: ",
             response_part="\nAssistant:",
