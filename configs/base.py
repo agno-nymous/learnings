@@ -7,7 +7,7 @@ class TrainingConfig:
     """Base configuration for Qwen3-VL QLoRA training."""
 
     # === Model ===
-    model_name: str = "unsloth/PaddleOCR-VL-bnb-4bit"  # Changed from Qwen3-VL for better Unsloth compatibility
+    model_name: str = "unsloth/PaddleOCR-VL"  # PaddleOCR-VL for OCR tasks
     load_in_4bit: bool = True
     use_gradient_checkpointing: str = "unsloth"
 
