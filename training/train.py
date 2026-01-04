@@ -206,25 +206,48 @@ def setup_model_and_tokenizer(config: TrainingConfig) -> tuple[Any, Any]:
     Returns:
         Tuple of (model, tokenizer).
     """
-    model, tokenizer = FastVisionModel.from_pretrained(
-        model_name=config.model_name,
-        load_in_4bit=config.load_in_4bit,
-        use_gradient_checkpointing=config.use_gradient_checkpointing,
-    )
+    from transformers import AutoModelForCausalLM
+    
+    # PaddleOCR-VL requires special loading parameters
+    is_paddleocr = "PaddleOCR" in config.model_name
+    
+    if is_paddleocr:
+        model, tokenizer = FastVisionModel.from_pretrained(
+            config.model_name,
+            max_seq_length=config.max_seq_length,
+            load_in_4bit=False,  # PaddleOCR doesn't support 4bit
+            load_in_8bit=False,
+            full_finetuning=True,
+            auto_model=AutoModelForCausalLM,
+            trust_remote_code=True,
+            use_gradient_checkpointing=config.use_gradient_checkpointing,
+        )
+    else:
+        model, tokenizer = FastVisionModel.from_pretrained(
+            model_name=config.model_name,
+            load_in_4bit=config.load_in_4bit,
+            use_gradient_checkpointing=config.use_gradient_checkpointing,
+        )
 
     model = FastVisionModel.get_peft_model(
         model,
-        finetune_vision_layers=config.finetune_vision_layers,
-        finetune_language_layers=config.finetune_language_layers,
-        finetune_attention_modules=config.finetune_attention_modules,
-        finetune_mlp_modules=config.finetune_mlp_modules,
         r=config.r,
         lora_alpha=config.lora_alpha,
         lora_dropout=config.lora_dropout,
         bias="none",
         random_state=config.seed,
         use_rslora=False,
-        loftq_config=None,
+        # PaddleOCR uses explicit target_modules instead of finetune_* params
+        target_modules=[
+            "q_proj", "k_proj", "v_proj", "o_proj",
+            "gate_proj", "up_proj", "down_proj",
+            "out_proj", "fc1", "fc2",
+            "linear_1", "linear_2"
+        ] if is_paddleocr else None,
+        finetune_vision_layers=config.finetune_vision_layers if not is_paddleocr else None,
+        finetune_language_layers=config.finetune_language_layers if not is_paddleocr else None,
+        finetune_attention_modules=config.finetune_attention_modules if not is_paddleocr else None,
+        finetune_mlp_modules=config.finetune_mlp_modules if not is_paddleocr else None,
     )
 
     return model, tokenizer

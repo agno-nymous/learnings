@@ -1,10 +1,7 @@
 from configs.base import TrainingConfig
 
 config = TrainingConfig(
-    # PaddleOCR-VL specific config
+    # PaddleOCR-VL specific config (from official notebook)
     model_name="unsloth/PaddleOCR-VL",
-    
-    # Training params (same as before)
-    max_steps=500,
-    eval_steps=50,
-)
+    r=64,  # PaddleOCR uses r=64
+    lora_alpha=64,
