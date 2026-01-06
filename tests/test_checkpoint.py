@@ -1,11 +1,10 @@
-import pytest
-import tempfile
-import shutil
-from pathlib import Path
+"""Tests for checkpoint management and retention."""
+
 from training.checkpoint import CheckpointManager, get_latest_checkpoint
 
 
 def test_checkpoint_manager_creation(tmp_path):
+    """Test CheckpointManager initialization with parameters."""
     mgr = CheckpointManager(tmp_path, keep_best=3, keep_recent=2)
     assert mgr.output_dir == tmp_path
     assert mgr.keep_best == 3
@@ -13,10 +12,12 @@ def test_checkpoint_manager_creation(tmp_path):
 
 
 def test_get_latest_checkpoint_none(tmp_path):
+    """Test get_latest_checkpoint returns None when no checkpoints exist."""
     assert get_latest_checkpoint(tmp_path) is None
 
 
 def test_get_latest_checkpoint(tmp_path):
+    """Test get_latest_checkpoint returns the highest numbered checkpoint."""
     chk1 = tmp_path / "checkpoint-10"
     chk2 = tmp_path / "checkpoint-50"
     chk1.mkdir()
@@ -27,6 +28,7 @@ def test_get_latest_checkpoint(tmp_path):
 
 
 def test_rotating_retention(tmp_path):
+    """Test checkpoint retention policy with overlapping best and recent checkpoints."""
     mgr = CheckpointManager(tmp_path, keep_best=2, keep_recent=2)
 
     # Create checkpoints with validation losses

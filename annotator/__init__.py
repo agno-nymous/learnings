@@ -1,5 +1,6 @@
 """Annotator module for OCR using Gemini."""
-from .factory import AnnotatorFactory
+
 from .base import Annotator
+from .factory import AnnotatorFactory
 
 __all__ = ["AnnotatorFactory", "Annotator"]

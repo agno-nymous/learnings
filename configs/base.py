@@ -1,5 +1,4 @@
-from dataclasses import dataclass, field
-from typing import Optional
+from dataclasses import dataclass
 
 
 @dataclass
@@ -53,7 +52,7 @@ class TrainingConfig:
 
     # === Output ===
     output_dir: str = "./checkpoints"  # Use relative path; mount network volume here if needed
-    experiment_name: Optional[str] = None  # Auto-generated if None
+    experiment_name: str | None = None  # Auto-generated if None
 
     # === Hardware/RunPod ===
     gpu_type: str = "RTX_4090"
@@ -62,7 +61,7 @@ class TrainingConfig:
 
     # === Monitoring ===
     wandb_project: str = "well-log-ocr"
-    wandb_entity: Optional[str] = None
+    wandb_entity: str | None = None
     report_to_wandb: bool = True
 
     # === Misc ===

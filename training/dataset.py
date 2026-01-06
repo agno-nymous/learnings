@@ -1,10 +1,12 @@
 """Dataset loading utilities for Qwen3-VL training."""
 
-from datasets import load_dataset as hf_load_dataset
-from PIL import Image
-from io import BytesIO
 import base64
-from typing import Any, Tuple
+from io import BytesIO
+from typing import Any
+
+from PIL import Image
+
+from datasets import load_dataset as hf_load_dataset
 
 
 def b64_to_image(b64_str: str) -> Image.Image:
@@ -35,6 +37,7 @@ class LazyVisionDataset:
         self.data = hf_dataset
 
     def __len__(self) -> int:
+        """Return the number of samples in the dataset."""
         return len(self.data)
 
     def __getitem__(self, idx: int) -> dict:
@@ -45,7 +48,7 @@ class LazyVisionDataset:
         """
         sample = self.data[idx]
         img = b64_to_image(sample["image_base64"])
-        
+
         # Format required by PaddleOCR/Unsloth - image must be included in content
         return {
             "images": [img],
@@ -65,7 +68,9 @@ class LazyVisionDataset:
         }
 
 
-def load_dataset(dataset_name: str, train_subset: int = -1, eval_subset: int = -1) -> Tuple[LazyVisionDataset, LazyVisionDataset]:
+def load_dataset(
+    dataset_name: str, train_subset: int = -1, eval_subset: int = -1
+) -> tuple[LazyVisionDataset, LazyVisionDataset]:
     """Load training and evaluation datasets.
 
     Args:

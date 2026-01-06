@@ -11,8 +11,7 @@ Requirements:
 """
 
 import argparse
-import os
-import subprocess
+import subprocess  # nosec: B404 - needed for scp/rsync commands
 import sys
 from pathlib import Path
 
@@ -40,7 +39,7 @@ Examples:
   # Download final model only (not checkpoints)
   python scripts/download_from_runpod.py user@runpod-instance \\
       --final-only
-        """
+        """,
     )
     parser.add_argument(
         "host",
@@ -191,7 +190,7 @@ def check_ssh_connection(host: str, port: int, ssh_key: str | None) -> bool:
 
 
 def main() -> int:
-    """Main entry point.
+    """Download model weights from RunPod to local filesystem.
 
     Returns:
         Exit code (0 for success, non-zero for error).
@@ -213,7 +212,10 @@ def main() -> int:
         print("Error: Cannot connect to RunPod via SSH", file=sys.stderr)
         print("\nTroubleshooting:", file=sys.stderr)
         print("  1. Ensure you have SSH access to the RunPod instance", file=sys.stderr)
-        print("  2. Check that SSH key is added to ssh agent: ssh-add ~/.ssh/your_key", file=sys.stderr)
+        print(
+            "  2. Check that SSH key is added to ssh agent: ssh-add ~/.ssh/your_key",
+            file=sys.stderr,
+        )
         print("  3. Verify host format: user@ip-address", file=sys.stderr)
         print("  4. Try manual SSH test: ssh -i <key> -p <port> user@host", file=sys.stderr)
         return 1

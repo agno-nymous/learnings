@@ -12,27 +12,29 @@ import sys
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
 # Add project root to path
 project_root = Path(__file__).parent.parent
 sys.path.insert(0, str(project_root))
 
-import torch
-import wandb
-from configs.base import TrainingConfig
-from tenacity import retry, stop_after_attempt, wait_exponential
-from training.checkpoint import CheckpointManager
-from training.dataset import load_dataset  # TODO: uncomment when dependencies installed
-from training.preflight import run_preflight_checks
+import torch  # noqa: E402
+import wandb  # noqa: E402
+from tenacity import retry, stop_after_attempt, wait_exponential  # noqa: E402
+from transformers import TrainerCallback  # noqa: E402
+from trl import SFTConfig, SFTTrainer  # noqa: E402
 
 # CRITICAL: Import unsloth BEFORE trl to ensure proper patching
-from unsloth import FastVisionModel, is_bf16_supported
-from unsloth.trainer import UnslothVisionDataCollator
+from unsloth import FastVisionModel  # noqa: E402
+from unsloth.trainer import UnslothVisionDataCollator  # noqa: E402
 
-from transformers import TrainerCallback
-from trl import SFTConfig, SFTTrainer
-from training.eval_utils import log_high_loss_samples
+from configs.base import TrainingConfig  # noqa: E402
+from training.checkpoint import CheckpointManager  # noqa: E402
+from training.dataset import (  # TODO: uncomment when dependencies installed  # noqa: E402
+    load_dataset,
+)
+from training.eval_utils import log_high_loss_samples  # noqa: E402
+from training.preflight import run_preflight_checks  # noqa: E402
 
 logger = logging.getLogger(__name__)
 
@@ -100,7 +102,7 @@ def load_config(config_path: str) -> TrainingConfig:
             try:
                 # First, try to import the full path as a module
                 module = importlib.import_module(module_path)
-                config = getattr(module, "config")
+                config = module.config
             except (ModuleNotFoundError, ImportError):
                 # If that fails, try treating the last part as a variable name
                 parts = module_path.split(".")
@@ -121,7 +123,7 @@ def load_config(config_path: str) -> TrainingConfig:
                 raise ValueError(f"Cannot load config from path: {config_path}")
             module = importlib.util.module_from_spec(spec)
             spec.loader.exec_module(module)
-            config = getattr(module, "config")
+            config = module.config
 
         # Validate config type
         if not isinstance(config, TrainingConfig):
@@ -132,16 +134,17 @@ def load_config(config_path: str) -> TrainingConfig:
         return config
 
     except (ModuleNotFoundError, ImportError) as e:
-        raise ValueError(f"Failed to import config module '{config_path}': {e}")
+        raise ValueError(f"Failed to import config module '{config_path}': {e}") from e
     except AttributeError as e:
-        raise ValueError(f"Config file must contain a 'config' variable: {e}")
+        raise ValueError(f"Config file must contain a 'config' variable: {e}") from e
     except Exception as e:
-        raise ValueError(f"Failed to load config from '{config_path}': {e}")
+        raise ValueError(f"Failed to load config from '{config_path}': {e}") from e
 
 
 @dataclass
 class CostTracker:
     """Track training costs based on GPU hourly rate."""
+
     gpu_hourly_rate: float  # e.g., 0.40 for RTX 4090 spot
     start_time: float = 0.0
     total_cost: float = 0.0
@@ -184,10 +187,16 @@ class CostLoggingCallback(TrainerCallback):
     """Log training cost to W&B during training."""
 
     def __init__(self, cost_tracker: CostTracker, budget_cap: float):
+        """Initialize the cost logging callback.
+
+        Args:
+            cost_tracker: CostTracker instance for monitoring compute costs.
+            budget_cap: Maximum budget in USD before warnings.
+        """
         self.cost_tracker = cost_tracker
         self.budget_cap = budget_cap
 
-    def on_log(self, args, state, control, logs=None, **kwargs):
+    def on_log(self, _args, _state, _control, _logs=None, **_kwargs):
         """Log current cost to W&B."""
         current_cost = self.cost_tracker.update()
         if wandb.run is not None:
@@ -226,30 +235,33 @@ class EarlyStoppingCallback(TrainerCallback):
         self.evals_without_improvement = 0
         self._threshold_reached = False
 
-    def on_log(self, args, state, control, logs=None, **kwargs):
+    def on_log(self, _args, _state, control, logs=None, **_kwargs):
         """Check training loss threshold after each step."""
         if logs is None:
             return
 
         # Check if train_loss is below threshold
         train_loss = logs.get("loss")
-        if train_loss is not None and train_loss < self.train_loss_threshold:
-            if not self._threshold_reached:
-                self._threshold_reached = True
-                logger.info(
-                    f"Train loss {train_loss:.4f} below threshold "
-                    f"{self.train_loss_threshold}. Will run eval and stop."
-                )
-                control.should_evaluate = True
-                control.should_training_stop = True
+        if (
+            train_loss is not None
+            and train_loss < self.train_loss_threshold
+            and not self._threshold_reached
+        ):
+            self._threshold_reached = True
+            logger.info(
+                f"Train loss {train_loss:.4f} below threshold "
+                f"{self.train_loss_threshold}. Will run eval and stop."
+            )
+            control.should_evaluate = True
+            control.should_training_stop = True
 
     def on_evaluate(
         self,
-        args: Any,
+        _args: Any,
         state: Any,
         control: Any,
-        metrics: Optional[dict[str, Any]] = None,
-        **kwargs: Any,
+        metrics: dict[str, Any] | None = None,
+        **_kwargs: Any,
     ) -> None:
         """Check for eval loss improvement and apply patience-based stopping."""
         if metrics is None:
@@ -272,13 +284,16 @@ class EarlyStoppingCallback(TrainerCallback):
             )
 
         # Check if we should stop due to patience (only after min_evals)
-        if state.global_step > 0 and self.evals_without_improvement >= self.patience:
-            if self.evals_without_improvement >= self.min_evals:
-                logger.info(
-                    f"Early stopping triggered: eval_loss hasn't improved for "
-                    f"{self.patience} evaluations. Best eval_loss: {self.best_eval_loss:.4f}"
-                )
-                control.should_training_stop = True
+        if (
+            state.global_step > 0
+            and self.evals_without_improvement >= self.patience
+            and self.evals_without_improvement >= self.min_evals
+        ):
+            logger.info(
+                f"Early stopping triggered: eval_loss hasn't improved for "
+                f"{self.patience} evaluations. Best eval_loss: {self.best_eval_loss:.4f}"
+            )
+            control.should_training_stop = True
 
 
 class EvalWithHighLossLoggingCallback(TrainerCallback):
@@ -300,10 +315,10 @@ class EvalWithHighLossLoggingCallback(TrainerCallback):
 
     def on_evaluate(
         self,
-        args: Any,
+        _args: Any,
         state: Any,
-        control: Any,
-        metrics: Optional[dict[str, Any]] = None,
+        _control: Any,
+        _metrics: dict[str, Any] | None = None,
         **kwargs: Any,
     ) -> None:
         """After evaluation, compute and log high-loss samples to W&B."""
@@ -360,10 +375,10 @@ def setup_model_and_tokenizer(config: TrainingConfig) -> tuple[Any, Any]:
         Tuple of (model, tokenizer).
     """
     from transformers import AutoModelForCausalLM
-    
+
     # PaddleOCR-VL requires special loading parameters
     is_paddleocr = "PaddleOCR" in config.model_name
-    
+
     if is_paddleocr:
         model, tokenizer = FastVisionModel.from_pretrained(
             config.model_name,
@@ -391,12 +406,24 @@ def setup_model_and_tokenizer(config: TrainingConfig) -> tuple[Any, Any]:
         random_state=config.seed,
         use_rslora=False,
         # PaddleOCR uses explicit target_modules instead of finetune_* params
-        target_modules=[
-            "q_proj", "k_proj", "v_proj", "o_proj",
-            "gate_proj", "up_proj", "down_proj",
-            "out_proj", "fc1", "fc2",
-            "linear_1", "linear_2"
-        ] if is_paddleocr else None,
+        target_modules=(
+            [
+                "q_proj",
+                "k_proj",
+                "v_proj",
+                "o_proj",
+                "gate_proj",
+                "up_proj",
+                "down_proj",
+                "out_proj",
+                "fc1",
+                "fc2",
+                "linear_1",
+                "linear_2",
+            ]
+            if is_paddleocr
+            else None
+        ),
         finetune_vision_layers=config.finetune_vision_layers if not is_paddleocr else None,
         finetune_language_layers=config.finetune_language_layers if not is_paddleocr else None,
         finetune_attention_modules=config.finetune_attention_modules if not is_paddleocr else None,
@@ -406,9 +433,12 @@ def setup_model_and_tokenizer(config: TrainingConfig) -> tuple[Any, Any]:
     # For PaddleOCR, also load the processor
     if is_paddleocr:
         from transformers import AutoProcessor
-        processor = AutoProcessor.from_pretrained(config.model_name, trust_remote_code=True)
+
+        processor = AutoProcessor.from_pretrained(
+            config.model_name, trust_remote_code=True
+        )  # nosec: B615
         return model, tokenizer, processor
-    
+
     return model, tokenizer, None
 
 
@@ -434,7 +464,7 @@ def create_trainer(
     train_dataset: Any,
     eval_dataset: Any,
     processor: Any = None,
-    resume_from_checkpoint: Optional[str] = None,
+    _resume_from_checkpoint: str | None = None,
 ) -> SFTTrainer:
     """Create SFTTrainer with configuration.
 
@@ -519,11 +549,11 @@ class CheckpointCallback(TrainerCallback):
 
     def on_evaluate(
         self,
-        args: Any,
+        _args: Any,
         state: Any,
-        control: Any,
-        metrics: Optional[dict[str, Any]] = None,
-        **kwargs: Any,
+        _control: Any,
+        metrics: dict[str, Any] | None = None,
+        **_kwargs: Any,
     ) -> None:
         """After evaluation, update checkpoint retention.
 
@@ -544,22 +574,23 @@ class CheckpointCallback(TrainerCallback):
 
 
 def main() -> None:
-    """Main training entry point."""
+    """Run the training pipeline."""
     args = parse_args()
     config = load_config(args.config)
 
-    print(f"=== Training Configuration ===")
+    print("=== Training Configuration ===")
     print(f"Experiment: {config.experiment_name}")
     print(f"Model: {config.model_name}")
     print(f"Max Steps: {config.max_steps}")
+    effective_batch = config.per_device_train_batch_size * config.gradient_accumulation_steps
     print(
-        f"Batch Size: {config.per_device_train_batch_size} × {config.gradient_accumulation_steps} = {config.per_device_train_batch_size * config.gradient_accumulation_steps} effective"
+        f"Batch Size: {config.per_device_train_batch_size} × {config.gradient_accumulation_steps} = {effective_batch} effective"
     )
     print(f"Learning Rate: {config.learning_rate}")
     print(f"Dataset: {config.dataset_name}")
     print(f"W&B Project: {config.wandb_project}")
     print(f"Output Dir: {config.output_dir}")
-    print(f"=============================\n")
+    print("=============================\n")
 
     # Run pre-flight checks
     run_preflight_checks(config)
@@ -605,18 +636,22 @@ def main() -> None:
         trainer.add_callback(CheckpointCallback(checkpoint_mgr))
 
         # Add early stopping callback
-        trainer.add_callback(EarlyStoppingCallback(
-            train_loss_threshold=config.train_loss_threshold,
-            patience=config.early_stopping_patience,
-            min_evals=config.early_stopping_min_evals,
-        ))
+        trainer.add_callback(
+            EarlyStoppingCallback(
+                train_loss_threshold=config.train_loss_threshold,
+                patience=config.early_stopping_patience,
+                min_evals=config.early_stopping_min_evals,
+            )
+        )
 
         # Add high-loss logging callback (only if W&B is enabled)
         if config.report_to_wandb:
-            trainer.add_callback(EvalWithHighLossLoggingCallback(
-                eval_dataset=eval_dataset,
-                top_k=20,
-            ))
+            trainer.add_callback(
+                EvalWithHighLossLoggingCallback(
+                    eval_dataset=eval_dataset,
+                    top_k=20,
+                )
+            )
 
         # Setup cost tracking
         cost_tracker = CostTracker(gpu_hourly_rate=get_gpu_rate(config))
@@ -638,9 +673,7 @@ def main() -> None:
         trainer_stats = trainer.train(resume_from_checkpoint=args.resume)
 
         used_memory = (
-            round(torch.cuda.max_memory_reserved() / 1024 / 1024 / 1024, 3)
-            if gpu_stats
-            else 0
+            round(torch.cuda.max_memory_reserved() / 1024 / 1024 / 1024, 3) if gpu_stats else 0
         )
         print(f"\nTraining Time: {round(trainer_stats.metrics['train_runtime'] / 60, 2)} min")
         if used_memory > 0:

@@ -1,12 +1,13 @@
 """Utilities for evaluation and high-loss sample logging."""
 
-from typing import List, Dict, Any
+from typing import Any
+
 import wandb
 
 from training.metrics import compute_cer, compute_wer
 
 
-def compute_sample_metrics(prediction: str, reference: str) -> Dict[str, float]:
+def compute_sample_metrics(prediction: str, reference: str) -> dict[str, float]:
     """Compute CER and WER for a single sample.
 
     Args:
@@ -23,10 +24,10 @@ def compute_sample_metrics(prediction: str, reference: str) -> Dict[str, float]:
 
 
 def log_high_loss_samples(
-    samples: List[Dict[str, Any]],
-    predictions: List[str],
-    references: List[str],
-    losses: List[float],
+    samples: list[dict[str, Any]],
+    predictions: list[str],
+    references: list[str],
+    losses: list[float],
     top_k: int = 20,
     table_name: str = "high_loss_samples",
 ) -> None:

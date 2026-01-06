@@ -1,10 +1,9 @@
 """Checkpoint management for training runs with rotating retention."""
 
 import json
+import logging
 import shutil
 from pathlib import Path
-from typing import Optional, Dict
-import logging
 
 logger = logging.getLogger(__name__)
 
@@ -25,7 +24,7 @@ class CheckpointManager:
         self.keep_recent = keep_recent
         self.output_dir.mkdir(parents=True, exist_ok=True)
 
-    def get_checkpoint_losses(self) -> Dict[str, float]:
+    def get_checkpoint_losses(self) -> dict[str, float]:
         """Get validation loss for all checkpoints.
 
         Returns:
@@ -57,7 +56,7 @@ class CheckpointManager:
             return int(parts[1])
         return 0
 
-    def cleanup(self, checkpoints: Dict[str, float]) -> None:
+    def cleanup(self, checkpoints: dict[str, float]) -> None:
         """Remove checkpoints outside retention policy.
 
         Keeps:
@@ -72,15 +71,13 @@ class CheckpointManager:
 
         # Sort by loss (ascending) - keep best
         sorted_by_loss = sorted(checkpoints.items(), key=lambda x: x[1])
-        best_names = {name for name, _ in sorted_by_loss[:self.keep_best]}
+        best_names = {name for name, _ in sorted_by_loss[: self.keep_best]}
 
         # Sort by step number (descending) - keep recent
         sorted_by_step = sorted(
-            checkpoints.items(),
-            key=lambda x: self._extract_step_number(x[0]),
-            reverse=True
+            checkpoints.items(), key=lambda x: self._extract_step_number(x[0]), reverse=True
         )
-        recent_names = {name for name, _ in sorted_by_step[:self.keep_recent]}
+        recent_names = {name for name, _ in sorted_by_step[: self.keep_recent]}
 
         # Union of best + recent to keep
         keep_names = best_names | recent_names
@@ -108,7 +105,7 @@ def _extract_step_number_from_name(checkpoint_name: str) -> int:
     return 0
 
 
-def get_latest_checkpoint(output_dir: Path) -> Optional[Path]:
+def get_latest_checkpoint(output_dir: Path) -> Path | None:
     """Get the most recent checkpoint by step number.
 
     Args:
@@ -126,8 +123,5 @@ def get_latest_checkpoint(output_dir: Path) -> Optional[Path]:
         return None
 
     # Sort by step number (descending)
-    checkpoints.sort(
-        key=lambda p: _extract_step_number_from_name(p.name),
-        reverse=True
-    )
+    checkpoints.sort(key=lambda p: _extract_step_number_from_name(p.name), reverse=True)
     return checkpoints[0]

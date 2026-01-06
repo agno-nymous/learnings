@@ -1,4 +1,5 @@
 """Centralized configuration for OCR pipeline."""
+
 from pathlib import Path
 
 # ═══════════════════════════════════════════════════════════════
@@ -64,10 +65,10 @@ DATASETS = {
     },
 }
 
+
 def get_dataset(name: str) -> dict:
     """Get dataset config by name."""
     if name not in DATASETS:
         available = ", ".join(DATASETS.keys())
         raise ValueError(f"Unknown dataset: {name}. Available: {available}")
     return DATASETS[name]
-

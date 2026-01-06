@@ -1,6 +1,7 @@
 """Pre-flight validation checks before training."""
 
 import os
+
 import torch
 from transformers import AutoConfig
 
@@ -21,7 +22,7 @@ def check_model_exists(model_name: str) -> bool:
         AutoConfig.from_pretrained(model_name)
         return True
     except Exception as e:
-        raise ValueError(f"Model '{model_name}' not found or inaccessible: {e}")
+        raise ValueError(f"Model '{model_name}' not found or inaccessible: {e}") from e
 
 
 def check_dataset_exists(dataset_name: str) -> bool:
@@ -38,10 +39,11 @@ def check_dataset_exists(dataset_name: str) -> bool:
     """
     try:
         from datasets import load_dataset
+
         load_dataset(dataset_name, split="train[:1]")
         return True
     except Exception as e:
-        raise ValueError(f"Dataset '{dataset_name}' not found or inaccessible: {e}")
+        raise ValueError(f"Dataset '{dataset_name}' not found or inaccessible: {e}") from e
 
 
 def check_network_volume(volume_path: str = "/runpod_volume") -> bool:

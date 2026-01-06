@@ -1,7 +1,8 @@
 """Early stopping callback for training."""
 
-from transformers import TrainerCallback
 import logging
+
+from transformers import TrainerCallback
 
 logger = logging.getLogger(__name__)
 
@@ -22,7 +23,7 @@ class EarlyStoppingCallback(TrainerCallback):
         self.wait = 0
         self.stopped = False
 
-    def on_evaluate(self, args, state, control, metrics=None, **kwargs):
+    def on_evaluate(self, _args, _state, control, metrics=None, **_kwargs):
         """Check if we should stop training.
 
         Args:
@@ -47,9 +48,13 @@ class EarlyStoppingCallback(TrainerCallback):
         else:
             # No improvement
             self.wait += 1
-            logger.info(f"No improvement for {self.wait} evals. Best: {self.best_loss:.4f}, Current: {current_loss:.4f}")
+            logger.info(
+                f"No improvement for {self.wait} evals. Best: {self.best_loss:.4f}, Current: {current_loss:.4f}"
+            )
 
             if self.wait >= self.patience:
-                logger.info(f"Early stopping triggered after {self.patience} evals with no improvement")
+                logger.info(
+                    f"Early stopping triggered after {self.patience} evals with no improvement"
+                )
                 control.should_training_stop = True
                 self.stopped = True

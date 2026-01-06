@@ -1,12 +1,13 @@
 """Tests for dataset loading utilities."""
 
-import pytest
-from training.dataset import LazyVisionDataset, b64_to_image, load_dataset
-from datasets import load_dataset as hf_load_dataset
 from PIL import Image
+
+from datasets import load_dataset as hf_load_dataset
+from training.dataset import LazyVisionDataset, b64_to_image, load_dataset
 
 
 def test_b64_to_image():
+    """Test base64 to image conversion with a valid PNG."""
     # Tiny valid 1x1 PNG base64
     b64_str = "/9j/4AAQSkZJRgABAQEAYABgAAD/2wBDAAgGBgcGBQgHBwcJCQgKDBQNDAsLDBkSEw8UHRofHh0aHBwgJC4nICIsIxwcKDcpLDAxNDQ0Hyc5PTgyPC4zNDL/2wBDAQkJCQwLDBgNDRgyIRwhMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjL/wAARCAABAAEDASIAAhEBAxEB/8QAFQABAQAAAAAAAAAAAAAAAAAAAAv/xAAUEAEAAAAAAAAAAAAAAAAAAAAA/8QAFQEBAQAAAAAAAAAAAAAAAAAAAAX/xAAUEQEAAAAAAAAAAAAAAAAAAAAA/9oADAMBAAIRAxEAPwCwAB//2Q=="
     img = b64_to_image(b64_str)
@@ -15,12 +16,14 @@ def test_b64_to_image():
 
 
 def test_lazy_vision_dataset_length():
+    """Test LazyVisionDataset returns correct length."""
     raw_dataset = hf_load_dataset("wrath/well-log-headers-ocr", split="train[:5]")
     dataset = LazyVisionDataset(raw_dataset)
     assert len(dataset) == 5
 
 
 def test_lazy_vision_dataset_getitem():
+    """Test LazyVisionDataset returns correctly formatted samples."""
     raw_dataset = hf_load_dataset("wrath/well-log-headers-ocr", split="train[:1]")
     dataset = LazyVisionDataset(raw_dataset)
     sample = dataset[0]
@@ -32,6 +35,7 @@ def test_lazy_vision_dataset_getitem():
 
 
 def test_load_dataset():
+    """Test load_dataset returns train and eval splits with specified sizes."""
     train_ds, eval_ds = load_dataset("wrath/well-log-headers-ocr", train_subset=10, eval_subset=5)
     assert len(train_ds) == 10
     assert len(eval_ds) == 5

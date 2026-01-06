@@ -84,7 +84,7 @@ runpodctl create pod \
   --env "GIT_REPO=https://github.com/your-org/well-log-ocr.git" \
   --env "GIT_BRANCH=feature/experiment-qwen3-qlora" \
   --env "CONFIG_PATH=configs/experiments/qwen3_qlora_r16.py" \
-  --env "WANDB_API_KEY=XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX" \
+  --env "WANDB_API_KEY=YOUR_WANDB_API_KEY_HERE" \  # pragma: allowlist secret
   --env "EXPERIMENT_NAME=qwen3-qlora-r16"
 ```
 
