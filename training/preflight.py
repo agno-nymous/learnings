@@ -19,7 +19,7 @@ def check_model_exists(model_name: str) -> bool:
         ValueError: If model not found.
     """
     try:
-        AutoConfig.from_pretrained(model_name)
+        AutoConfig.from_pretrained(model_name, trust_remote_code=True)
         return True
     except Exception as e:
         raise ValueError(f"Model '{model_name}' not found or inaccessible: {e}") from e
