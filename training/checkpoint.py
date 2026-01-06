@@ -5,6 +5,8 @@ import logging
 import shutil
 from pathlib import Path
 
+from transformers import TrainerCallback
+
 logger = logging.getLogger(__name__)
 
 
@@ -125,3 +127,41 @@ def get_latest_checkpoint(output_dir: Path) -> Path | None:
     # Sort by step number (descending)
     checkpoints.sort(key=lambda p: _extract_step_number_from_name(p.name), reverse=True)
     return checkpoints[0]
+
+
+class CheckpointRetentionCallback(TrainerCallback):
+    """HuggingFace Trainer callback for automatic checkpoint cleanup.
+
+    Integrates CheckpointManager with the Trainer lifecycle to clean up
+    old checkpoints after each evaluation, keeping only the best and
+    most recent checkpoints per the retention policy.
+    """
+
+    def __init__(self, output_dir: Path, keep_best: int = 5, keep_recent: int = 5) -> None:
+        """Initialize checkpoint retention callback.
+
+        Args:
+            output_dir: Directory where checkpoints are saved.
+            keep_best: Number of best (lowest eval loss) checkpoints to keep.
+            keep_recent: Number of most recent checkpoints to keep.
+        """
+        self.manager = CheckpointManager(output_dir, keep_best, keep_recent)
+
+    def on_evaluate(self, _args, _state, _control, metrics=None, **_kwargs):
+        """Clean up checkpoints after each evaluation.
+
+        Args:
+            _args: Training arguments.
+            _state: Trainer state.
+            _control: Trainer control.
+            metrics: Evaluation metrics (should contain eval_loss).
+            **_kwargs: Additional keyword arguments.
+        """
+        if metrics is None or "eval_loss" not in metrics:
+            return
+
+        # Get all checkpoints with their losses
+        checkpoints = self.manager.get_checkpoint_losses()
+
+        # Run cleanup
+        self.manager.cleanup(checkpoints)

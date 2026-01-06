@@ -1,8 +1,9 @@
 # Core ML dependencies - pinned versions for PaddleOCR-VL compatibility
 transformers==4.56.2
-trl==0.22.2
-unsloth==2024.12.10
+trl==0.24.0
+unsloth==2026.1.2
 torch>=2.0.0
+torchvision==0.24.1
 xformers
 peft>=0.10.0
 datasets==4.3.0
@@ -10,14 +11,19 @@ bitsandbytes
 accelerate
 triton
 cut_cross_entropy
-unsloth_zoo
+unsloth_zoo==2026.1.2
 einops
+diffusers==0.36.0
+importlib-metadata==8.7.1
+multiprocess==0.70.16
+fsspec==2025.9.0
+zipp==3.23.0
 
 # Data processing
 pillow>=10.0.0
 pandas>=2.0.0
 sentencepiece
-protobuf
+protobuf==6.33.2
 huggingface_hub>=0.34.0
 hf_transfer
 

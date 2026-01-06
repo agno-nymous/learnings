@@ -4,6 +4,8 @@
 Extracted from finetune_qwen3_vl_qlora.ipynb for production use.
 """
 
+# CRITICAL: Import unsloth BEFORE torch/transformers/trl
+# Unsloth patches these libraries at import time for optimizations
 import argparse
 import importlib
 import importlib.util
@@ -14,6 +16,9 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from unsloth import FastVisionModel  # isort: skip
+from unsloth.trainer import UnslothVisionDataCollator  # isort: skip
+
 # Add project root to path
 project_root = Path(__file__).parent.parent
 sys.path.insert(0, str(project_root))
@@ -23,10 +28,6 @@ import wandb  # noqa: E402
 from tenacity import retry, stop_after_attempt, wait_exponential  # noqa: E402
 from transformers import TrainerCallback  # noqa: E402
 from trl import SFTConfig, SFTTrainer  # noqa: E402
-
-# CRITICAL: Import unsloth BEFORE trl to ensure proper patching
-from unsloth import FastVisionModel  # noqa: E402
-from unsloth.trainer import UnslothVisionDataCollator  # noqa: E402
 
 from configs.base import TrainingConfig  # noqa: E402
 from training.checkpoint import CheckpointManager  # noqa: E402
