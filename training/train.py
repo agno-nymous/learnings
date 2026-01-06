@@ -465,7 +465,6 @@ def create_trainer(
     train_dataset: Any,
     eval_dataset: Any,
     processor: Any = None,
-    _resume_from_checkpoint: str | None = None,
 ) -> SFTTrainer:
     """Create SFTTrainer with configuration.
 
@@ -476,7 +475,6 @@ def create_trainer(
         train_dataset: Training dataset.
         eval_dataset: Evaluation dataset.
         processor: Optional processor for vision models.
-        resume_from_checkpoint: Optional checkpoint path to resume from.
 
     Returns:
         SFTTrainer instance.
@@ -623,7 +621,6 @@ def main() -> None:
             train_dataset,
             eval_dataset,
             processor=processor,
-            resume_from_checkpoint=args.resume,
         )
 
         # Create checkpoint manager
