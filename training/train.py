@@ -431,6 +431,14 @@ def setup_model_and_tokenizer(config: TrainingConfig) -> tuple[Any, Any]:
         finetune_mlp_modules=config.finetune_mlp_modules if not is_paddleocr else None,
     )
 
+    # CRITICAL: Mark PaddleOCR-VL as vision model for SFTTrainer detection
+    # Unsloth's SFTTrainer checks for vision model attributes when dataset has images
+    # After PEFT wrapping, we need to explicitly set these attributes
+    if is_paddleocr:
+        model.is_vision_model = True
+        if hasattr(model, "model"):
+            model.model.is_vision_model = True
+
     # For PaddleOCR, also load the processor
     if is_paddleocr:
         from transformers import AutoProcessor
