@@ -507,7 +507,7 @@ def create_trainer(
 
     return SFTTrainer(
         model=model,
-        processing_class=processor.tokenizer if processor else tokenizer,
+        tokenizer=processor.tokenizer if processor else tokenizer,
         data_collator=data_collator,
         train_dataset=train_dataset,
         eval_dataset=eval_dataset,
