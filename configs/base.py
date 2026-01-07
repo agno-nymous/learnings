@@ -20,7 +20,7 @@ class TrainingConfig:
     finetune_mlp_modules: bool = True
 
     # === Training ===
-    max_steps: int = 500
+    num_train_epochs: int = 3
     learning_rate: float = 2e-4
     per_device_train_batch_size: int = 2
     per_device_eval_batch_size: int = 2
@@ -80,4 +80,4 @@ class TrainingConfig:
 
         model_short = self.model_name.split("/")[1].split("-")[0].lower()
         timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-        return f"{model_short}-qlora-r{self.r}-lr{self.learning_rate:.0e}-steps{self.max_steps}-{timestamp}"
+        return f"{model_short}-qlora-r{self.r}-lr{self.learning_rate:.0e}-epochs{self.num_train_epochs}-{timestamp}"

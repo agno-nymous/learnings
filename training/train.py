@@ -7,6 +7,7 @@ Extracted from finetune_qwen3_vl_qlora.ipynb for production use.
 # CRITICAL: Import unsloth BEFORE torch/transformers/trl
 # Unsloth patches these libraries at import time for optimizations
 import argparse
+import contextlib
 import importlib
 import importlib.util
 import logging
@@ -300,19 +301,63 @@ class EarlyStoppingCallback(TrainerCallback):
 class EvalWithHighLossLoggingCallback(TrainerCallback):
     """Run evaluation with high-loss sample logging to W&B.
 
-    After each evaluation, logs the worst performing samples (top 20 by loss)
-    to W&B as a table for visual inspection and analysis.
+    After each evaluation, runs actual model inference on sampled eval data
+    and logs predictions vs references to W&B for visual inspection.
     """
 
-    def __init__(self, eval_dataset: Any, top_k: int = 20) -> None:
+    def __init__(self, eval_dataset: Any, processor: Any, top_k: int = 20) -> None:
         """Initialize the callback.
 
         Args:
             eval_dataset: The evaluation dataset to sample from.
-            top_k: Number of worst samples to log.
+            processor: The model processor for inference.
+            top_k: Number of samples to log.
         """
         self.eval_dataset = eval_dataset
+        self.processor = processor
         self.top_k = top_k
+
+    def _run_inference(self, model: Any, image: Any) -> str:
+        """Run inference on a single image.
+
+        Args:
+            model: The model to use for inference.
+            image: PIL Image to process.
+
+        Returns:
+            Generated text output.
+        """
+        instruction = """Convert the following document to markdown.
+Return only the markdown with no explanation text. Do not include delimiters like ```markdown or ```html.
+
+RULES:
+- You must include all information on the page. Do not exclude headers, footers, or subtext.
+- Return tables in an HTML format.
+- Charts & infographics must be interpreted to a markdown format. Prefer table format when applicable.
+- Prefer using ☐ and ☑ for check boxes."""
+
+        messages = [
+            {
+                "role": "user",
+                "content": [{"type": "image"}, {"type": "text", "text": instruction}],
+            }
+        ]
+        text_prompt = self.processor.tokenizer.apply_chat_template(
+            messages, tokenize=False, add_generation_prompt=True
+        )
+        inputs = self.processor(
+            image, text_prompt, add_special_tokens=False, return_tensors="pt"
+        ).to(model.device)
+
+        with torch.no_grad():
+            output = model.generate(
+                **inputs,
+                max_new_tokens=2048,
+                use_cache=True,
+                temperature=1.5,
+                min_p=0.1,
+            )
+        return self.processor.tokenizer.decode(output[0], skip_special_tokens=True)
 
     def on_evaluate(
         self,
@@ -322,36 +367,53 @@ class EvalWithHighLossLoggingCallback(TrainerCallback):
         _metrics: dict[str, Any] | None = None,
         **kwargs: Any,
     ) -> None:
-        """After evaluation, compute and log high-loss samples to W&B."""
-        # Only log if W&B is active
+        """After evaluation, run inference and log samples to W&B."""
         if not wandb.run:
             return
 
-        # Get the model from kwargs
         model = kwargs.get("model")
         if model is None:
             return
 
-        logger.info(f"Computing high-loss samples for top {self.top_k}...")
+        logger.info(f"Running inference on {self.top_k} eval samples for W&B logging...")
 
-        # Run a small evaluation pass to get per-sample losses
-        # Note: This is a simplified version that logs samples from the eval set
-        # For full per-sample loss tracking, you'd need to customize the evaluation loop
         try:
-            # For now, we'll log a subset of eval samples with random sampling
-            # as a placeholder. Full implementation requires custom compute_metrics.
             import random
 
-            sample_size = min(100, len(self.eval_dataset))
+            # Sample eval set
+            sample_size = min(self.top_k, len(self.eval_dataset))
             indices = random.sample(range(len(self.eval_dataset)), sample_size)
-
             samples = [self.eval_dataset[i] for i in indices]
 
-            # Placeholder predictions/references - in real implementation,
-            # you'd run model inference on these samples
-            predictions = ["(Run model inference to get predictions)"] * sample_size
-            references = [s.get("text", "") for s in samples]
-            losses = [1.0] * sample_size  # Placeholder losses
+            # Switch to inference mode
+            FastVisionModel.for_inference(model)
+
+            predictions = []
+            references = []
+            losses = []
+
+            for i, sample in enumerate(samples):
+                img = sample["images"][0]
+                # Extract reference from messages (assistant content)
+                ref = ""
+                for msg in sample.get("messages", []):
+                    if msg.get("role") == "assistant":
+                        for content in msg.get("content", []):
+                            if content.get("type") == "text":
+                                ref = content.get("text", "")
+                                break
+
+                # Run actual inference
+                pred = self._run_inference(model, img)
+                predictions.append(pred)
+                references.append(ref)
+                losses.append(1.0)  # Placeholder loss (we don't track per-sample loss)
+
+                if (i + 1) % 5 == 0:
+                    logger.info(f"  Processed {i + 1}/{sample_size} samples")
+
+            # Switch back to training mode
+            FastVisionModel.for_training(model)
 
             log_high_loss_samples(
                 samples=samples,
@@ -361,9 +423,13 @@ class EvalWithHighLossLoggingCallback(TrainerCallback):
                 top_k=self.top_k,
                 table_name=f"high_loss_samples_step_{state.global_step}",
             )
-            logger.info(f"Logged {self.top_k} high-loss samples to W&B")
+            logger.info(f"Logged {sample_size} samples with predictions to W&B")
+
         except Exception as e:
             logger.warning(f"Failed to log high-loss samples: {e}")
+            # Ensure we return to training mode even on error
+            with contextlib.suppress(Exception):
+                FastVisionModel.for_training(model)
 
 
 def setup_model_and_tokenizer(config: TrainingConfig) -> tuple[Any, Any]:
@@ -516,12 +582,12 @@ def create_trainer(
             per_device_eval_batch_size=config.per_device_eval_batch_size,
             gradient_accumulation_steps=config.gradient_accumulation_steps,
             warmup_steps=config.warmup_steps,
-            max_steps=config.max_steps,
+            num_train_epochs=config.num_train_epochs,
             learning_rate=config.learning_rate,
             fp16=config.fp16,
             bf16=config.bf16,
             logging_steps=config.logging_steps,
-            eval_strategy="steps",
+            eval_strategy="epoch",
             eval_steps=config.eval_steps,
             optim=config.optim,
             weight_decay=config.weight_decay,
@@ -588,7 +654,7 @@ def main() -> None:
     print("=== Training Configuration ===")
     print(f"Experiment: {config.experiment_name}")
     print(f"Model: {config.model_name}")
-    print(f"Max Steps: {config.max_steps}")
+    print(f"Epochs: {config.num_train_epochs}")
     effective_batch = config.per_device_train_batch_size * config.gradient_accumulation_steps
     print(
         f"Batch Size: {config.per_device_train_batch_size} × {config.gradient_accumulation_steps} = {effective_batch} effective"
@@ -655,7 +721,8 @@ def main() -> None:
             trainer.add_callback(
                 EvalWithHighLossLoggingCallback(
                     eval_dataset=eval_dataset,
-                    top_k=20,
+                    processor=processor,
+                    top_k=5,
                 )
             )
 

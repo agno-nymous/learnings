@@ -1,4 +1,4 @@
-.PHONY: setup download rotate crop preprocess annotate annotate-batch app clean help olmocr-download split-welllog train train-paddleocr train-qwen setup-pod resume download-from-runpod download-final-only
+.PHONY: setup download rotate crop preprocess annotate annotate-batch app clean help olmocr-download split-welllog train train-paddleocr train-qwen setup-pod resume download-from-runpod download-final-only inference
 
 # Default settings
 N ?= 500
@@ -141,6 +141,25 @@ train-qwen:
 
 resume:
 	python training/train.py --config $(CONFIG) --resume $(RESUME)
+
+# Inference
+MODEL_PATH ?=
+IMAGE ?=
+NUM_SAMPLES ?= 5
+
+inference:
+	@if [ -z "$(MODEL_PATH)" ]; then \
+		echo "Error: MODEL_PATH is required"; \
+		echo "Usage: make inference MODEL_PATH=checkpoints/your-model"; \
+		echo "       make inference MODEL_PATH=checkpoints/your-model IMAGE=path/to/image.png"; \
+		echo "       make inference MODEL_PATH=checkpoints/your-model NUM_SAMPLES=10  # eval set"; \
+		exit 1; \
+	fi
+	@if [ -n "$(IMAGE)" ]; then \
+		python training/inference.py --model $(MODEL_PATH) --image $(IMAGE); \
+	else \
+		python training/inference.py --model $(MODEL_PATH) --eval --num-samples $(NUM_SAMPLES); \
+	fi
 
 # Download from RunPod
 RUNPOD_HOST ?=
