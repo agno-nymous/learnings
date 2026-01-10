@@ -4,6 +4,7 @@
 Usage:
     python training/inference.py --model checkpoints/paddleocr-qlora-... --image path/to/image.png
     python training/inference.py --model checkpoints/paddleocr-qlora-... --eval  # Run on eval set
+    python training/inference.py --model checkpoints/paddleocr-qlora-... --eval --wandb --wandb-project my-project
 """
 
 import argparse
@@ -12,20 +13,20 @@ import sys
 from io import BytesIO
 from pathlib import Path
 
-import torch
-from PIL import Image
-from transformers import AutoProcessor
-from unsloth import FastVisionModel
+# Add project root to path for imports
+project_root = Path(__file__).parent.parent
+sys.path.insert(0, str(project_root))
 
-# Default OCR instruction
-DEFAULT_INSTRUCTION = """Convert the following document to markdown.
-Return only the markdown with no explanation text. Do not include delimiters like ```markdown or ```html.
+import torch  # noqa: E402
+import wandb  # noqa: E402
+from PIL import Image  # noqa: E402
+from transformers import AutoProcessor  # noqa: E402
+from unsloth import FastVisionModel  # noqa: E402
 
-RULES:
-- You must include all information on the page. Do not exclude headers, footers, or subtext.
-- Return tables in an HTML format.
-- Charts & infographics must be interpreted to a markdown format. Prefer table format when applicable.
-- Prefer using ☐ and ☑ for check boxes."""
+from core.config import OCR_INSTRUCTION  # noqa: E402
+
+# Alias for backward compatibility
+DEFAULT_INSTRUCTION = OCR_INSTRUCTION
 
 
 def load_model(model_path: str) -> tuple:
@@ -95,13 +96,49 @@ def run_inference(
     return processor.tokenizer.decode(output[0], skip_special_tokens=True)
 
 
-def run_on_eval_set(model, processor, num_samples: int = 5) -> None:
+def log_to_wandb(
+    images: list,
+    predictions: list[str],
+    references: list[str],
+    table_name: str = "eval_predictions",
+) -> None:
+    """Log predictions vs references to W&B as a table.
+
+    Args:
+        images: List of PIL Images.
+        predictions: List of model predictions.
+        references: List of reference answers.
+        table_name: Name for the W&B table.
+    """
+    columns = ["image", "prediction", "reference", "pred_length", "ref_length"]
+    table = wandb.Table(columns=columns)
+
+    for img, pred, ref in zip(images, predictions, references, strict=True):
+        # Convert PIL image to W&B Image
+        wandb_img = wandb.Image(img)
+        table.add_data(wandb_img, pred, ref, len(pred), len(ref))
+
+    wandb.log({table_name: table})
+    print(f"Logged {len(predictions)} samples to W&B table: {table_name}")
+
+
+def run_on_eval_set(
+    model,
+    processor,
+    num_samples: int = 5,
+    log_wandb: bool = False,
+    wandb_project: str = None,
+    wandb_run_name: str = None,
+) -> None:
     """Run inference on samples from the eval dataset.
 
     Args:
         model: The finetuned model.
         processor: The model processor.
         num_samples: Number of eval samples to process.
+        log_wandb: Whether to log results to W&B.
+        wandb_project: W&B project name (required if log_wandb=True).
+        wandb_run_name: Optional W&B run name.
     """
     from datasets import load_dataset
 
@@ -111,6 +148,22 @@ def run_on_eval_set(model, processor, num_samples: int = 5) -> None:
 
     num_samples = min(num_samples, len(dataset))
     print(f"Running inference on {num_samples} samples...\n")
+
+    # Initialize W&B if requested
+    if log_wandb:
+        if not wandb_project:
+            print("Error: --wandb-project required when using --wandb")
+            sys.exit(1)
+        wandb.init(
+            project=wandb_project,
+            name=wandb_run_name or "post-training-eval",
+            job_type="evaluation",
+        )
+        print(f"W&B initialized: {wandb_project}")
+
+    images = []
+    predictions = []
+    references = []
 
     for i in range(num_samples):
         sample = dataset[i]
@@ -123,15 +176,26 @@ def run_on_eval_set(model, processor, num_samples: int = 5) -> None:
         print(f"{'='*60}")
 
         result = run_inference(model, processor, image)
+        ref = sample["answer"]
+
+        # Store for W&B logging
+        images.append(image)
+        predictions.append(result)
+        references.append(ref)
 
         print("\n📄 PREDICTION:")
         print(result[:1000] + "..." if len(result) > 1000 else result)
 
         print("\n✅ REFERENCE:")
-        ref = sample["answer"]
         print(ref[:1000] + "..." if len(ref) > 1000 else ref)
 
         print("\n")
+
+    # Log to W&B if enabled
+    if log_wandb:
+        log_to_wandb(images, predictions, references)
+        wandb.finish()
+        print("W&B logging complete!")
 
 
 def main():

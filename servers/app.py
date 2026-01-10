@@ -1,30 +1,33 @@
 #!/usr/bin/env python3
-"""
-OCR Pipeline Web App.
+"""OCR Pipeline Web App.
 
 Single unified server providing:
 - REST API endpoints for OCR control and data
 - Frontend serving for the single-page application
 - Dataset switching support
+
+Uses dependency injection with FastAPI Depends for service access.
 """
 
 import logging
 import os
-import subprocess
 import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-
 from dotenv import load_dotenv  # noqa: E402
-from fastapi import BackgroundTasks, FastAPI, Query  # noqa: E402
+from fastapi import BackgroundTasks, Depends, FastAPI, Query  # noqa: E402
 from fastapi.responses import FileResponse, Response  # noqa: E402
 from pydantic import BaseModel  # noqa: E402
 
-from core.config import DATASETS, get_dataset  # noqa: E402
 from core.image_utils import load_as_png_bytes  # noqa: E402
-from core.jsonl_utils import read_entries  # noqa: E402
+from servers.services import (  # noqa: E402
+    DatasetService,
+    JobService,
+    get_dataset_service,
+    get_job_service,
+)
 
 load_dotenv()
 
@@ -35,21 +38,11 @@ app = FastAPI(title="OCR Pipeline", description="OCR Training Data Generation")
 
 PROJECT_ROOT = Path(__file__).parent.parent
 FRONTEND_DIR = PROJECT_ROOT / "frontend"
-LOG_FILE = PROJECT_ROOT / "ocr_execution.log"
 
 
-class ProcessStatus:
-    """Track the status of background OCR processes."""
-
-    def __init__(self):
-        """Initialize status tracker with default values."""
-        self.running = False
-        self.type = None
-        self.dataset = None
-        self.process = None
-
-
-status = ProcessStatus()
+# ═══════════════════════════════════════════════════════════════
+# Request/Response Models
+# ═══════════════════════════════════════════════════════════════
 
 
 class OCRRequest(BaseModel):
@@ -61,175 +54,6 @@ class OCRRequest(BaseModel):
     workers: int = 4
 
 
-def run_annotation(model: str, mode: str, dataset: str, workers: int = 4):
-    """Run annotation using the unified CLI."""
-    global status  # noqa: F824
-    status.running = True
-    status.type = mode
-    status.dataset = dataset
-
-    try:
-        cmd = [
-            sys.executable,
-            str(PROJECT_ROOT / "annotate.py"),
-            "--dataset",
-            dataset,
-            "--mode",
-            mode,
-            "--model",
-            model,
-            "--workers",
-            str(workers),
-        ]
-        logger.info(f"Starting OCR: {' '.join(cmd)}")
-
-        with open(LOG_FILE, "a") as f:
-            f.write(f"\n--- Starting {mode} OCR on {dataset} with {model} ---\n")
-            f.flush()
-            process = subprocess.Popen(
-                cmd,
-                stdout=f,
-                stderr=subprocess.STDOUT,
-                text=True,
-                cwd=str(PROJECT_ROOT),
-            )
-            status.process = process
-            process.wait()
-            f.write(f"--- Finished {mode} OCR on {dataset} ---\n")
-            f.flush()
-    except Exception as e:
-        logger.error(f"Failed to run: {e}")
-        with open(LOG_FILE, "a") as f:
-            f.write(f"ERROR: {e}\n")
-    finally:
-        status.running = False
-        status.type = None
-        status.dataset = None
-        status.process = None
-
-
-# ═══════════════════════════════════════════════════════════════
-# API Endpoints
-# ═══════════════════════════════════════════════════════════════
-
-
-@app.get("/api/datasets")
-async def list_datasets():
-    """List available datasets."""
-    return {
-        "datasets": list(DATASETS.keys()),
-        "default": "welllog",
-    }
-
-
-@app.get("/api/entries")
-async def get_entries(dataset: str = Query("welllog")):
-    """Get entries for a specific dataset."""
-    try:
-        ds = get_dataset(dataset)
-    except ValueError as e:
-        return {"error": str(e)}
-
-    output_path = PROJECT_ROOT / ds["output"]
-    clean_path = output_path.with_suffix(".clean.jsonl")
-
-    if clean_path.exists():
-        return list(read_entries(clean_path))
-    if output_path.exists():
-        return list(read_entries(output_path))
-    return []
-
-
-@app.get("/api/stats")
-async def get_stats(dataset: str = Query("welllog")):
-    """Get OCR statistics for a dataset."""
-    try:
-        ds = get_dataset(dataset)
-    except ValueError as e:
-        return {"error": str(e)}
-
-    output_path = PROJECT_ROOT / ds["output"]
-    if not output_path.exists():
-        return {"total": 0, "success": 0, "error": 0}
-
-    total, success, error = 0, 0, 0
-    for entry in read_entries(output_path):
-        total += 1
-        if entry.get("status") == "success":
-            success += 1
-        else:
-            error += 1
-    return {"total": total, "success": success, "error": error}
-
-
-@app.get("/api/status")
-async def get_status():
-    """Get current job status."""
-    return {
-        "running": status.running,
-        "type": status.type,
-        "dataset": status.dataset,
-    }
-
-
-@app.post("/api/run-ocr")
-async def start_ocr(req: OCRRequest, background_tasks: BackgroundTasks):
-    """Start an OCR job."""
-    if status.running:
-        return {"message": "A process is already running"}
-
-    background_tasks.add_task(run_annotation, req.model, req.mode, req.dataset, req.workers)
-    return {"message": f"Started {req.mode} OCR on {req.dataset} ({req.workers} workers)"}
-
-
-@app.get("/api/logs/execution")
-async def get_execution_logs():
-    """Get execution logs."""
-    if LOG_FILE.exists():
-        with open(LOG_FILE) as f:
-            lines = f.readlines()
-            return {"logs": "".join(lines[-200:])}
-    return {"logs": "No execution logs yet."}
-
-
-# ═══════════════════════════════════════════════════════════════
-# Pipeline Actions (unified - work on any dataset)
-# ═══════════════════════════════════════════════════════════════
-
-
-def run_pipeline_command(name: str, cmd: list):
-    """Run a pipeline command in background."""
-    global status  # noqa: F824
-    status.running = True
-    status.type = name
-    status.dataset = None
-
-    try:
-        logger.info(f"Running {name}: {' '.join(cmd)}")
-        with open(LOG_FILE, "a") as f:
-            f.write(f"\n--- Starting {name} ---\n")
-            f.flush()
-            process = subprocess.Popen(
-                cmd,
-                stdout=f,
-                stderr=subprocess.STDOUT,
-                text=True,
-                cwd=str(PROJECT_ROOT),
-            )
-            status.process = process
-            process.wait()
-            f.write(f"--- Finished {name} ---\n")
-            f.flush()
-    except Exception as e:
-        logger.error(f"Failed: {e}")
-        with open(LOG_FILE, "a") as f:
-            f.write(f"ERROR: {e}\n")
-    finally:
-        status.running = False
-        status.type = None
-        status.process = None
-
-
 class DatasetActionRequest(BaseModel):
     """Request model for dataset actions."""
 
@@ -237,10 +61,91 @@ class DatasetActionRequest(BaseModel):
     limit: int = 50
 
 
+# ═══════════════════════════════════════════════════════════════
+# API Endpoints - Dataset Operations
+# ═══════════════════════════════════════════════════════════════
+
+
+@app.get("/api/datasets")
+async def list_datasets(
+    dataset_service: DatasetService = Depends(get_dataset_service),
+):
+    """List available datasets."""
+    return dataset_service.list_datasets()
+
+
+@app.get("/api/entries")
+async def get_entries(
+    dataset: str = Query("welllog"),
+    dataset_service: DatasetService = Depends(get_dataset_service),
+):
+    """Get entries for a specific dataset."""
+    return dataset_service.get_entries(dataset)
+
+
+@app.get("/api/stats")
+async def get_stats(
+    dataset: str = Query("welllog"),
+    dataset_service: DatasetService = Depends(get_dataset_service),
+):
+    """Get OCR statistics for a dataset."""
+    return dataset_service.get_stats(dataset)
+
+
+# ═══════════════════════════════════════════════════════════════
+# API Endpoints - Job Operations
+# ═══════════════════════════════════════════════════════════════
+
+
+@app.get("/api/status")
+async def get_status(
+    job_service: JobService = Depends(get_job_service),
+):
+    """Get current job status."""
+    return job_service.get_status()
+
+
+@app.post("/api/run-ocr")
+async def start_ocr(
+    req: OCRRequest,
+    background_tasks: BackgroundTasks,
+    job_service: JobService = Depends(get_job_service),
+):
+    """Start an OCR job."""
+    if job_service.is_running():
+        return {"message": "A process is already running"}
+
+    background_tasks.add_task(
+        job_service.run_annotation,
+        req.model,
+        req.mode,
+        req.dataset,
+        req.workers,
+    )
+    return {"message": f"Started {req.mode} OCR on {req.dataset} ({req.workers} workers)"}
+
+
+@app.get("/api/logs/execution")
+async def get_execution_logs(
+    job_service: JobService = Depends(get_job_service),
+):
+    """Get execution logs."""
+    return {"logs": job_service.get_logs()}
+
+
+# ═══════════════════════════════════════════════════════════════
+# API Endpoints - Pipeline Actions
+# ═══════════════════════════════════════════════════════════════
+
+
 @app.post("/api/download")
-async def download_dataset(req: DatasetActionRequest, background_tasks: BackgroundTasks):
+async def download_dataset(
+    req: DatasetActionRequest,
+    background_tasks: BackgroundTasks,
+    job_service: JobService = Depends(get_job_service),
+):
     """Download data for the specified dataset type."""
-    if status.running:
+    if job_service.is_running():
         return {"message": "A process is already running"}
 
     # Determine dataset type from the dataset name
@@ -267,14 +172,18 @@ async def download_dataset(req: DatasetActionRequest, background_tasks: Backgrou
     else:
         return {"message": f"Unknown dataset type: {ds_type}"}
 
-    background_tasks.add_task(run_pipeline_command, name, cmd)
+    background_tasks.add_task(job_service.run_pipeline_command, name, cmd)
     return {"message": f"Started: {name}"}
 
 
 @app.post("/api/split")
-async def split_dataset(req: DatasetActionRequest, background_tasks: BackgroundTasks):
+async def split_dataset(
+    req: DatasetActionRequest,
+    background_tasks: BackgroundTasks,
+    job_service: JobService = Depends(get_job_service),
+):
     """Split the specified dataset into train/eval."""
-    if status.running:
+    if job_service.is_running():
         return {"message": "A process is already running"}
 
     ds_type = req.dataset.split("-")[0]
@@ -288,24 +197,23 @@ async def split_dataset(req: DatasetActionRequest, background_tasks: BackgroundT
     else:
         return {"message": f"Unknown dataset type: {ds_type}"}
 
-    background_tasks.add_task(run_pipeline_command, name, cmd)
+    background_tasks.add_task(job_service.run_pipeline_command, name, cmd)
     return {"message": f"Started: {name}"}
 
 
 # ═══════════════════════════════════════════════════════════════
-# Image Serving (supports dataset parameter)
+# Image Serving
 # ═══════════════════════════════════════════════════════════════
 
 
 @app.get("/images/{filename}")
-async def get_image(filename: str, dataset: str = Query("welllog")):
+async def get_image(
+    filename: str,
+    dataset: str = Query("welllog"),
+    dataset_service: DatasetService = Depends(get_dataset_service),
+):
     """Serve image from the specified dataset."""
-    try:
-        ds = get_dataset(dataset)
-    except ValueError:
-        ds = {"images_dir": Path("./cropped_headers")}  # Fallback
-
-    images_dir = PROJECT_ROOT / ds["images_dir"]
+    images_dir = dataset_service.get_images_dir(dataset)
     safe_name = os.path.basename(filename)
     image_path = images_dir / safe_name
 
@@ -341,6 +249,11 @@ async def read_styles():
 async def read_app_js():
     """Return the app.js file."""
     return FileResponse(FRONTEND_DIR / "app.js")
+
+
+# ═══════════════════════════════════════════════════════════════
+# Main Entry Point
+# ═══════════════════════════════════════════════════════════════
 
 
 if __name__ == "__main__":

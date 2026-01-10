@@ -1,24 +1,33 @@
-"""Batch API Gemini OCR annotator (50% cheaper)."""
+"""Batch API Gemini OCR annotator (50% cheaper).
+
+Processes images using the Gemini Batch API for cost-efficient
+large-scale OCR operations.
+"""
 
 import io
 import json
-import os
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
-
-from dotenv import load_dotenv
-from google import genai
+from typing import TypedDict
 
 from core.config import OCR_INSTRUCTION
 from core.image_utils import load_as_png_bytes
+from core.types import AnnotationEntry, AnnotationResult
 
 from .base import Annotator
+from .client import GeminiClientMixin
 
-load_dotenv()
+
+class UploadResult(TypedDict):
+    """Result from uploading a single image."""
+
+    filename: str
+    file_uri: str | None
+    status: str
 
 
-class GeminiBatchAnnotator(Annotator):
+class GeminiBatchAnnotator(GeminiClientMixin, Annotator):
     """Batch OCR using Gemini Batch API.
 
     50% cheaper than real-time API. Workflow:
@@ -27,80 +36,105 @@ class GeminiBatchAnnotator(Annotator):
     3. Submit batch job
     4. Wait for completion
     5. Download and parse results
+
+    Attributes:
+        model: Gemini model identifier.
+        workers: Number of parallel workers for uploads.
+        poll_interval: Seconds between batch job status checks.
     """
 
-    def __init__(self, model: str, workers: int = 4, poll_interval: int = 60):
+    def __init__(self, model: str, workers: int = 4, poll_interval: int = 60) -> None:
+        """Initialize the Gemini batch annotator.
+
+        Args:
+            model: Gemini model identifier (e.g., 'gemini-3-flash-preview').
+            workers: Number of parallel workers for image uploads.
+            poll_interval: Seconds between batch job status checks.
+        """
         self.model = model
         self.workers = workers
         self.poll_interval = poll_interval
-        self._client = None
+        self._client = None  # Initialize for mixin
 
     @property
     def name(self) -> str:
+        """Human-readable annotator name."""
         return f"Gemini Batch API ({self.model})"
 
     @property
     def mode(self) -> str:
+        """Annotation mode identifier."""
         return "batch"
 
-    @property
-    def client(self) -> genai.Client:
-        if self._client is None:
-            api_key = os.getenv("GOOGLE_API_KEY")
-            if not api_key:
-                raise ValueError("GOOGLE_API_KEY not set")
-            self._client = genai.Client(api_key=api_key)
-        return self._client
+    def _upload_image(self, image_path: Path) -> UploadResult:
+        """Upload a single image to Files API.
 
-    def _upload_image(self, image_path: Path) -> dict:
-        """Upload a single image to Files API."""
+        Args:
+            image_path: Path to image file.
+
+        Returns:
+            UploadResult with filename, file_uri, and status.
+        """
         try:
             png_bytes = load_as_png_bytes(image_path)
             buffer = io.BytesIO(png_bytes)
 
             uploaded = self.client.files.upload(
-                file=buffer, config={"display_name": image_path.name, "mime_type": "image/png"}
+                file=buffer,
+                config={"display_name": image_path.name, "mime_type": "image/png"},
             )
-            return {"filename": image_path.name, "file_uri": uploaded.name, "status": "success"}
+            return {
+                "filename": image_path.name,
+                "file_uri": uploaded.name,
+                "status": "success",
+            }
         except Exception as e:
-            return {"filename": image_path.name, "file_uri": None, "status": f"error: {e}"}
+            return {
+                "filename": image_path.name,
+                "file_uri": None,
+                "status": f"error: {e}",
+            }
 
-    def annotate(self, image_paths: list[Path], output_path: Path) -> dict[str, int]:
-        """Process images via batch API."""
+    def _upload_images(self, image_paths: list[Path]) -> dict[str, str]:
+        """Upload images to Files API in parallel.
+
+        Args:
+            image_paths: List of image file paths.
+
+        Returns:
+            Dict mapping filename to file_uri for successful uploads.
+        """
         total = len(image_paths)
+        uploads: dict[str, str] = {}
 
-        # ═══════════════════════════════════════════════════════════════
-        # STEP 1: Upload images
-        # ═══════════════════════════════════════════════════════════════
         print("\n" + "=" * 60)
         print("STEP 1: Uploading images to Gemini Files API...")
         print("=" * 60)
 
-        uploads = {}
         with ThreadPoolExecutor(max_workers=self.workers) as executor:
             futures = {executor.submit(self._upload_image, img): img for img in image_paths}
             for i, future in enumerate(as_completed(futures), 1):
                 result = future.result()
-                if result["status"] == "success":
+                if result["status"] == "success" and result["file_uri"]:
                     uploads[result["filename"]] = result["file_uri"]
-                    print(f"[{i}/{total}] ✓ {result['filename']}")
+                    print(f"[{i}/{total}] OK {result['filename']}")
                 else:
-                    print(f"[{i}/{total}] ✗ {result['filename']}: {result['status']}")
-
-        if not uploads:
-            print("No files uploaded successfully!")
-            return {"success": 0, "errors": total}
+                    print(f"[{i}/{total}] FAIL {result['filename']}: {result['status']}")
 
         print(f"\nUploaded: {len(uploads)} files")
+        return uploads
 
-        # ═══════════════════════════════════════════════════════════════
-        # STEP 2: Create JSONL batch input
-        # ═══════════════════════════════════════════════════════════════
+    def _create_batch_input(self, uploads: dict[str, str], batch_input_path: Path) -> None:
+        """Create JSONL batch input file.
+
+        Args:
+            uploads: Dict mapping filename to file_uri.
+            batch_input_path: Path to write the batch input file.
+        """
         print("\n" + "=" * 60)
         print("STEP 2: Creating batch input JSONL...")
         print("=" * 60)
 
-        batch_input_path = Path("./batch_input_temp.jsonl")
         with open(batch_input_path, "w") as f:
             for filename, file_uri in uploads.items():
                 if file_uri.startswith("files/"):
@@ -125,9 +159,15 @@ class GeminiBatchAnnotator(Annotator):
 
         print(f"Created: {batch_input_path} ({len(uploads)} requests)")
 
-        # ═══════════════════════════════════════════════════════════════
-        # STEP 3: Submit batch job
-        # ═══════════════════════════════════════════════════════════════
+    def _submit_batch_job(self, batch_input_path: Path) -> str:
+        """Submit batch job and return job name.
+
+        Args:
+            batch_input_path: Path to the batch input JSONL file.
+
+        Returns:
+            Batch job name for tracking.
+        """
         print("\n" + "=" * 60)
         print("STEP 3: Submitting batch job...")
         print("=" * 60)
@@ -140,90 +180,163 @@ class GeminiBatchAnnotator(Annotator):
         print(f"Uploaded input file: {input_file.name}")
 
         batch_job = self.client.batches.create(
-            model=self.model, src=input_file.name, config={"display_name": "well_log_ocr"}
+            model=self.model,
+            src=input_file.name,
+            config={"display_name": "well_log_ocr"},
         )
         print(f"Batch job created: {batch_job.name}")
+        return batch_job.name
 
-        # ═══════════════════════════════════════════════════════════════
-        # STEP 4: Wait for completion
-        # ═══════════════════════════════════════════════════════════════
+    def _wait_for_completion(self, job_name: str) -> str | None:
+        """Wait for batch job completion.
+
+        Args:
+            job_name: Batch job name to monitor.
+
+        Returns:
+            Destination file name on success, None on failure.
+        """
         print("\n" + "=" * 60)
         print("STEP 4: Waiting for batch job to complete...")
         print("=" * 60)
 
         while True:
-            batch_job = self.client.batches.get(name=batch_job.name)
+            batch_job = self.client.batches.get(name=job_name)
             state = str(batch_job.state)
             print(f"State: {state}")
 
             if "SUCCEEDED" in state:
-                print("✓ Batch job completed!")
-                break
+                print("Batch job completed!")
+                return batch_job.dest.file_name
             elif "FAILED" in state or "CANCELLED" in state:
-                print(f"✗ Batch job failed: {state}")
-                batch_input_path.unlink(missing_ok=True)
-                return {"success": 0, "errors": total}
+                print(f"Batch job failed: {state}")
+                return None
 
             print(f"Waiting {self.poll_interval}s...")
             time.sleep(self.poll_interval)
 
-        # ═══════════════════════════════════════════════════════════════
-        # STEP 5: Download and parse results
-        # ═══════════════════════════════════════════════════════════════
+    def _parse_results(self, dest_file: str, output_path: Path) -> AnnotationResult:
+        """Download and parse batch results.
+
+        Args:
+            dest_file: Destination file name from batch job.
+            output_path: Path to output JSONL file.
+
+        Returns:
+            AnnotationResult with success and error counts.
+        """
         print("\n" + "=" * 60)
         print("STEP 5: Downloading results...")
         print("=" * 60)
 
-        content = self.client.files.download(file=batch_job.dest.file_name)
+        content = self.client.files.download(file=dest_file)
 
         success = 0
         errors = 0
 
         with open(output_path, "a") as out_f:
             for line in content.decode("utf-8").strip().split("\n"):
-                try:
-                    result = json.loads(line)
-                    key = result.get("key", "unknown")
-
-                    if "error" in result:
-                        errors += 1
-                        continue
-
-                    response = result.get("response", {})
-                    candidates = response.get("candidates", [])
-                    text = (
-                        candidates[0].get("content", {}).get("parts", [{}])[0].get("text", "")
-                        if candidates
-                        else ""
-                    )
-
-                    if text:
-                        training_row = {
-                            "filename": key,
-                            "instruction": OCR_INSTRUCTION,
-                            "answer": text,
-                            "status": "success",
-                            "model": self.model,
-                        }
-                        out_f.write(json.dumps(training_row, ensure_ascii=False) + "\n")
+                entry = self._parse_result_line(line)
+                if entry:
+                    out_f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+                    if entry["status"] == "success":
                         success += 1
                     else:
-                        error_row = {
-                            "filename": key,
-                            "instruction": OCR_INSTRUCTION,
-                            "answer": "",
-                            "status": "error: empty response",
-                            "model": self.model,
-                        }
-                        out_f.write(json.dumps(error_row, ensure_ascii=False) + "\n")
                         errors += 1
-                except json.JSONDecodeError:
+                else:
                     errors += 1
 
-        batch_input_path.unlink(missing_ok=True)
-
-        print(f"\n{'=' * 60}")
-        print(f"DONE! Success: {success}, Errors: {errors}")
-        print(f"{'=' * 60}")
-
         return {"success": success, "errors": errors}
+
+    def _parse_result_line(self, line: str) -> AnnotationEntry | None:
+        """Parse a single result line from batch output.
+
+        Args:
+            line: JSON line from batch results.
+
+        Returns:
+            AnnotationEntry or None if parsing fails.
+        """
+        try:
+            result = json.loads(line)
+            key = result.get("key", "unknown")
+
+            if "error" in result:
+                return {
+                    "filename": key,
+                    "instruction": OCR_INSTRUCTION,
+                    "answer": "",
+                    "status": f"error: {result['error']}",
+                    "model": self.model,
+                }
+
+            response = result.get("response", {})
+            candidates = response.get("candidates", [])
+            text = (
+                candidates[0].get("content", {}).get("parts", [{}])[0].get("text", "")
+                if candidates
+                else ""
+            )
+
+            if text:
+                return {
+                    "filename": key,
+                    "instruction": OCR_INSTRUCTION,
+                    "answer": text,
+                    "status": "success",
+                    "model": self.model,
+                }
+            else:
+                return {
+                    "filename": key,
+                    "instruction": OCR_INSTRUCTION,
+                    "answer": "",
+                    "status": "error: empty response",
+                    "model": self.model,
+                }
+        except json.JSONDecodeError:
+            return None
+
+    def annotate(self, image_paths: list[Path], output_path: Path) -> AnnotationResult:
+        """Process images via batch API.
+
+        Args:
+            image_paths: List of image file paths to process.
+            output_path: Path to output JSONL file (append mode).
+
+        Returns:
+            AnnotationResult with success and error counts.
+        """
+        total = len(image_paths)
+        batch_input_path = Path("./batch_input_temp.jsonl")
+
+        try:
+            # Step 1: Upload images
+            uploads = self._upload_images(image_paths)
+            if not uploads:
+                print("No files uploaded successfully!")
+                return {"success": 0, "errors": total}
+
+            # Step 2: Create batch input
+            self._create_batch_input(uploads, batch_input_path)
+
+            # Step 3: Submit batch job
+            job_name = self._submit_batch_job(batch_input_path)
+
+            # Step 4: Wait for completion
+            dest_file = self._wait_for_completion(job_name)
+            if not dest_file:
+                return {"success": 0, "errors": total}
+
+            # Step 5: Parse results
+            result = self._parse_results(dest_file, output_path)
+
+            print(f"\n{'=' * 60}")
+            print(f"DONE! Success: {result['success']}, Errors: {result['errors']}")
+            print(f"{'=' * 60}")
+
+            return result
+
+        finally:
+            # Cleanup temp file
+            batch_input_path.unlink(missing_ok=True)

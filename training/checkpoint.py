@@ -1,17 +1,49 @@
-"""Checkpoint management for training runs with rotating retention."""
+"""Checkpoint management for training runs with rotating retention.
+
+Provides CheckpointManager for tracking and cleaning up checkpoints
+based on retention policy (keep best N + recent N).
+"""
 
 import json
 import logging
 import shutil
 from pathlib import Path
 
-from transformers import TrainerCallback
-
 logger = logging.getLogger(__name__)
 
 
+def extract_step_number(checkpoint_name: str) -> int:
+    """Extract step number from checkpoint name.
+
+    Args:
+        checkpoint_name: Checkpoint directory name like 'checkpoint-123'
+
+    Returns:
+        Step number as int, or 0 if not parseable.
+
+    Example:
+        >>> extract_step_number("checkpoint-100")
+        100
+        >>> extract_step_number("invalid")
+        0
+    """
+    parts = checkpoint_name.split("-")
+    if len(parts) >= 2 and parts[1].isdigit():
+        return int(parts[1])
+    return 0
+
+
 class CheckpointManager:
-    """Manages checkpoint saving and cleanup with retention policy."""
+    """Manages checkpoint saving and cleanup with retention policy.
+
+    Keeps the best checkpoints by eval_loss and the most recent
+    checkpoints by step number.
+
+    Attributes:
+        output_dir: Directory where checkpoints are saved.
+        keep_best: Number of best checkpoints to retain.
+        keep_recent: Number of recent checkpoints to retain.
+    """
 
     def __init__(self, output_dir: Path, keep_best: int = 5, keep_recent: int = 5) -> None:
         """Initialize checkpoint manager.
@@ -44,20 +76,6 @@ class CheckpointManager:
                     logger.warning(f"Could not read eval_loss from {state_file}")
         return checkpoints
 
-    def _extract_step_number(self, checkpoint_name: str) -> int:
-        """Extract step number from checkpoint name.
-
-        Args:
-            checkpoint_name: Checkpoint directory name like 'checkpoint-123'
-
-        Returns:
-            Step number as int, or 0 if not parseable.
-        """
-        parts = checkpoint_name.split("-")
-        if len(parts) >= 2 and parts[1].isdigit():
-            return int(parts[1])
-        return 0
-
     def cleanup(self, checkpoints: dict[str, float]) -> None:
         """Remove checkpoints outside retention policy.
 
@@ -77,7 +95,7 @@ class CheckpointManager:
 
         # Sort by step number (descending) - keep recent
         sorted_by_step = sorted(
-            checkpoints.items(), key=lambda x: self._extract_step_number(x[0]), reverse=True
+            checkpoints.items(), key=lambda x: extract_step_number(x[0]), reverse=True
         )
         recent_names = {name for name, _ in sorted_by_step[: self.keep_recent]}
 
@@ -88,23 +106,9 @@ class CheckpointManager:
         for chk_name in checkpoints:
             if chk_name not in keep_names:
                 chk_path = self.output_dir / chk_name
-                shutil.rmtree(chk_path)
-                logger.info(f"Removed checkpoint: {chk_name}")
-
-
-def _extract_step_number_from_name(checkpoint_name: str) -> int:
-    """Extract step number from checkpoint name.
-
-    Args:
-        checkpoint_name: Checkpoint directory name like 'checkpoint-123'
-
-    Returns:
-        Step number as int, or 0 if not parseable.
-    """
-    parts = checkpoint_name.split("-")
-    if len(parts) >= 2 and parts[1].isdigit():
-        return int(parts[1])
-    return 0
+                if chk_path.exists():
+                    shutil.rmtree(chk_path)
+                    logger.info(f"Removed checkpoint: {chk_name}")
 
 
 def get_latest_checkpoint(output_dir: Path) -> Path | None:
@@ -125,43 +129,5 @@ def get_latest_checkpoint(output_dir: Path) -> Path | None:
         return None
 
     # Sort by step number (descending)
-    checkpoints.sort(key=lambda p: _extract_step_number_from_name(p.name), reverse=True)
+    checkpoints.sort(key=lambda p: extract_step_number(p.name), reverse=True)
     return checkpoints[0]
-
-
-class CheckpointRetentionCallback(TrainerCallback):
-    """HuggingFace Trainer callback for automatic checkpoint cleanup.
-
-    Integrates CheckpointManager with the Trainer lifecycle to clean up
-    old checkpoints after each evaluation, keeping only the best and
-    most recent checkpoints per the retention policy.
-    """
-
-    def __init__(self, output_dir: Path, keep_best: int = 5, keep_recent: int = 5) -> None:
-        """Initialize checkpoint retention callback.
-
-        Args:
-            output_dir: Directory where checkpoints are saved.
-            keep_best: Number of best (lowest eval loss) checkpoints to keep.
-            keep_recent: Number of most recent checkpoints to keep.
-        """
-        self.manager = CheckpointManager(output_dir, keep_best, keep_recent)
-
-    def on_evaluate(self, _args, _state, _control, metrics=None, **_kwargs):
-        """Clean up checkpoints after each evaluation.
-
-        Args:
-            _args: Training arguments.
-            _state: Trainer state.
-            _control: Trainer control.
-            metrics: Evaluation metrics (should contain eval_loss).
-            **_kwargs: Additional keyword arguments.
-        """
-        if metrics is None or "eval_loss" not in metrics:
-            return
-
-        # Get all checkpoints with their losses
-        checkpoints = self.manager.get_checkpoint_losses()
-
-        # Run cleanup
-        self.manager.cleanup(checkpoints)

@@ -1,62 +1,65 @@
-"""Real-time Gemini OCR annotator."""
+"""Real-time Gemini OCR annotator.
+
+Processes images using the standard Gemini generate_content API
+with parallel workers for throughput.
+"""
 
 import json
-import os
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
-from dotenv import load_dotenv
-from google import genai
 from google.genai import types
 
 from core.config import OCR_INSTRUCTION
 from core.image_utils import load_as_png_base64
+from core.types import AnnotationEntry, AnnotationResult
 
 from .base import Annotator
+from .client import GeminiClientMixin
 
-load_dotenv()
 
-
-class GeminiAnnotator(Annotator):
+class GeminiAnnotator(GeminiClientMixin, Annotator):
     """Real-time OCR using Gemini API.
 
-    Processes images one at a time (with parallel workers) using
-    the standard generate_content API.
+    Processes images with parallel workers using the standard
+    generate_content API. Good for small to medium batches.
+
+    Attributes:
+        model: Gemini model identifier.
+        workers: Number of parallel workers.
     """
 
-    def __init__(self, model: str, workers: int = 4):
+    def __init__(self, model: str, workers: int = 4) -> None:
         """Initialize the Gemini real-time annotator.
 
         Args:
-            model: Gemini model identifier.
-            workers: Number of parallel workers (not used in real-time mode).
+            model: Gemini model identifier (e.g., 'gemini-3-flash-preview').
+            workers: Number of parallel workers for processing.
         """
         self.model = model
         self.workers = workers
-        self._client = None
+        self._client = None  # Initialize for mixin
 
     @property
     def name(self) -> str:
-        """Return the annotator name."""
+        """Human-readable annotator name."""
         return f"Gemini Real-time ({self.model})"
 
     @property
     def mode(self) -> str:
-        """Return the annotation mode."""
+        """Annotation mode identifier."""
         return "realtime"
 
-    @property
-    def client(self) -> genai.Client:
-        if self._client is None:
-            api_key = os.getenv("GOOGLE_API_KEY")
-            if not api_key:
-                raise ValueError("GOOGLE_API_KEY not set")
-            self._client = genai.Client(api_key=api_key)
-        return self._client
+    def _process_single(self, image_path: Path) -> AnnotationEntry:
+        """Process a single image through OCR.
 
-    def _process_single(self, image_path: Path) -> dict:
-        """Process a single image."""
+        Args:
+            image_path: Path to image file.
+
+        Returns:
+            AnnotationEntry with OCR results or error status.
+        """
         try:
             image_data = load_as_png_base64(image_path)
 
@@ -95,8 +98,16 @@ class GeminiAnnotator(Annotator):
                 "model": self.model,
             }
 
-    def annotate(self, image_paths: list[Path], output_path: Path) -> dict[str, int]:
-        """Process images using parallel workers."""
+    def annotate(self, image_paths: list[Path], output_path: Path) -> AnnotationResult:
+        """Process images using parallel workers.
+
+        Args:
+            image_paths: List of image file paths to process.
+            output_path: Path to output JSONL file (append mode).
+
+        Returns:
+            AnnotationResult with success and error counts.
+        """
         success_count = 0
         error_count = 0
         total = len(image_paths)
@@ -118,13 +129,13 @@ class GeminiAnnotator(Annotator):
 
                     if result["status"] == "success":
                         success_count += 1
-                        print(f"[{i}/{total}] ✓ {img_path.name}")
+                        print(f"[{i}/{total}] OK {img_path.name}")
                     else:
                         error_count += 1
-                        print(f"[{i}/{total}] ✗ {img_path.name}: {result['status']}")
+                        print(f"[{i}/{total}] FAIL {img_path.name}: {result['status']}")
                 except Exception as e:
                     error_count += 1
-                    print(f"[{i}/{total}] ✗ {img_path.name}: {e}")
+                    print(f"[{i}/{total}] FAIL {img_path.name}: {e}")
 
                 time.sleep(0.1)  # Rate limiting
 
